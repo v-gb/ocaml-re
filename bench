@@ -1,0 +1,15 @@
+#!/bin/bash
+
+set -e -u -o pipefail
+sshhost="$1" # something like root@ip
+path=_build/default/benchmarks/benchmark.exe
+hash=$(md5sum $path | awk '{print $1}')
+has_bench_dir=$(ssh "$sshhost" 'if test -d /tmp/benchmarks; then echo true; else echo false; fi')
+if ! $has_bench_dir; then
+    scp -r benchmarks/ "$sshhost":/tmp/benchmarks
+fi
+has_exe=$(ssh "$sshhost" 'if test -f /tmp/bench-'$hash'.exe; then echo true; else echo false; fi')
+if ! $has_exe; then
+    scp $path "$sshhost":/tmp/bench-$hash.exe
+fi
+ssh "$sshhost" 'cd /tmp; /tmp/bench-'$hash'.exe -q 0.2 -sexp'
