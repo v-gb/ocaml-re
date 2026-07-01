@@ -99,3 +99,5 @@ module Ascii : sig
   val punct : t
   val case_insens : t -> t
 end
+
+val ascii_or_latin1_cword : [ `Ascii | `Latin1 ] -> t

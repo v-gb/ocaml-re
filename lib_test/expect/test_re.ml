@@ -193,6 +193,23 @@ let%expect_test "not_boundary" =
   [%expect {| Not_found |}]
 ;;
 
+let%expect_test "lookahead" =
+  test_re (seq [ lookahead `Pos (str "a"); str "a" ]) "za";
+  [%expect {| [| (1, 2) |] |}];
+  test_re (seq [ lookahead `Pos (str "aaaa"); lookahead `Pos (str "aa") ]) "bbaaaa";
+  [%expect {| [| (2, 2) |] |}];
+  test_re (seq [ lookahead `Neg (str "aaaa"); lookahead `Pos (str "aa") ]) "bbaaaa";
+  [%expect {| [| (3, 3) |] |}];
+  test_re (seq [ lookahead `Pos (str "aaaa"); lookahead `Neg (str "aa") ]) "bbaaaa";
+  [%expect {| Not_found |}];
+  test_re (seq [ lookahead `Neg (str "aaaa"); lookahead `Neg (str "aa") ]) "bbaaaa";
+  [%expect {| [| (0, 0) |] |}];
+  test_re (alt [ group eol; lookahead `Neg (set "a") ]) "";
+  [%expect {| [| (0, 0); (0, 0) |] |}];
+  test_re (shortest (alt [ group eol; lookahead `Neg (set "a") ])) "";
+  [%expect {| [| (0, 0); (0, 0) |] |}]
+;;
+
 let%expect_test "default match semantics" =
   test_re (seq [ rep (alt [ char 'a'; char 'b' ]); char 'b' ]) "aabaab";
   [%expect {| [| (0, 6) |] |}];

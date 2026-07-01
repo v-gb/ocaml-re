@@ -32,7 +32,7 @@ type match_info =
   | Failed
   | Running of { no_match_starts_before : int }
 
-type state_info =
+type 'state state_info =
   { idx : Idx.t
   ; (* Index of the current position in the position table.
        Not yet computed transitions point to a dummy state where
@@ -40,6 +40,7 @@ type state_info =
        If [idx] is set to [break] for states that either always
        succeed or always fail. *)
     mutable final : (Category.t * (Automata.Idx.t * Automata.Status.t)) list
+  ; mutable advance : ([ `Partial | `At_match_stop of Category.t ] * 'state) list
   ; (* Mapping from the category of the next character to
        - the index where the next position should be saved
        - possibly, the list of marks (and the corresponding indices)
@@ -57,9 +58,9 @@ type state_info =
 module State : sig
   type t
 
-  val make : ncol:int -> state_info -> t
-  val make_break : state_info -> t
-  val get_info : t -> state_info
+  val make : ncol:int -> t state_info -> t
+  val make_break : t state_info -> t
+  val get_info : t -> t state_info
   val follow_transition : t -> color:Cset.c -> t
   val set_transition : t -> color:Cset.c -> t -> unit
   val is_unknown_transition : t -> color:Cset.c -> bool
@@ -71,11 +72,11 @@ end = struct
      of the transition table, which are lazily computed, we use
      double-checked locking. *)
 
-  let get_info (Table st) : state_info = Obj.magic (Array.unsafe_get st 0)
+  let get_info (Table st) : t state_info = Obj.magic (Array.unsafe_get st 0)
   [@@inline always]
   ;;
 
-  let set_info (Table st) (info : state_info) = st.(0) <- Obj.magic info
+  let set_info (Table st) (info : t state_info) = st.(0) <- Obj.magic info
 
   let follow_transition (Table st) ~color = Array.unsafe_get st (1 + Cset.to_int color)
   [@@inline always]
@@ -89,8 +90,11 @@ end = struct
     Idx.is_unknown info.idx
   ;;
 
-  let dummy (info : state_info) = Table [| Obj.magic info |]
-  let unknown_state = dummy { idx = Idx.unknown; final = []; desc = Automata.State.dummy }
+  let dummy (info : t state_info) = Table [| Obj.magic info |]
+
+  let unknown_state =
+    dummy { idx = Idx.unknown; final = []; advance = []; desc = Automata.State.dummy }
+  ;;
 
   let make ~ncol state =
     let st = Table (Array.make (ncol + 1) unknown_state) in
@@ -222,6 +226,7 @@ let find_state re desc =
             (let idx = Automata.State.idx desc in
              if break_state then Idx.make_break idx else Idx.of_idx idx)
         ; final = []
+        ; advance = []
         ; desc
         }
       in
@@ -297,14 +302,14 @@ let rec loop_no_mark re ~colors s ~pos ~last st0 st =
   else st
 ;;
 
-let[@inline always] find_or_add_final re st cat ~f =
+let final re st cat =
   try List.assq cat st.final with
   | Not_found ->
     Mutex.lock re.mutex;
     let res =
       try List.assq cat st.final with
       | Not_found ->
-        let st' = f re st cat in
+        let st' = delta re cat ~color:Cset.null_char st in
         let res = Automata.State.idx st', Automata.State.status_no_mutex st' in
         st.final <- (cat, res) :: st.final;
         res
@@ -313,13 +318,20 @@ let[@inline always] find_or_add_final re st cat ~f =
     res
 ;;
 
-let final re st cat =
-  find_or_add_final re st cat ~f:(fun re st cat -> delta re cat ~color:Cset.null_char st)
-;;
-
-let advance re st =
-  find_or_add_final re st Category.dummy ~f:(fun re st _cat ->
-    Automata.advance re.tbl st.desc)
+let advance re st cat =
+  try List.assoc cat st.advance with
+  | Not_found ->
+    Mutex.lock re.mutex;
+    let res =
+      try List.assoc cat st.advance with
+      | Not_found ->
+        let desc' = Automata.advance re.tbl cat st.desc in
+        let st' = find_state re desc' in
+        st.advance <- (cat, st') :: st.advance;
+        st'
+    in
+    Mutex.unlock re.mutex;
+    res
 ;;
 
 let find_initial_state re cat =
@@ -408,8 +420,7 @@ let final_boundary_check re positions ~last ~slen s state_info ~groups =
   let idx, res =
     let final_cat =
       Category.(
-        search_boundary
-        ++ if last = slen then inexistant else category re ~color:(get_color re s last))
+        if last = slen then inexistant else category re ~color:(get_color re s last))
     in
     final re state_info final_cat
   in
@@ -419,10 +430,42 @@ let final_boundary_check re positions ~last ~slen s state_info ~groups =
   res
 ;;
 
+let match_after_stop re positions s ~slen ~last state_info ~groups =
+  let st =
+    let category =
+      Category.(
+        stop_boundary
+        ++ if last = slen then inexistant else category re ~color:(get_color re s last))
+    in
+    advance re state_info (`At_match_stop category)
+  in
+  let info = State.get_info st in
+  if groups
+  then
+    Positions.set
+      positions
+      (if Idx.is_break info.idx then Idx.break_idx info.idx else Idx.idx info.idx)
+      last;
+  if Idx.is_break info.idx
+  then Automata.State.status re.mutex info.desc
+  else (
+    let st = scan_str re positions s st ~pos:last ~last:slen ~groups in
+    let info = State.get_info st in
+    if Idx.is_break info.idx
+    then Automata.State.status re.mutex info.desc
+    else final_boundary_check re positions ~last:slen ~slen s info ~groups)
+;;
+
 let final_advance re positions ~last state_info ~groups =
-  let idx, res = advance re state_info in
+  let st = advance re state_info `Partial in
+  let info = State.get_info st in
+  let res = Automata.State.status re.mutex info.desc in
   (match groups, res with
-   | true, Match _ -> Positions.set positions (Automata.Idx.to_int idx) last
+   | true, Match _ ->
+     Positions.set
+       positions
+       (if Idx.is_break info.idx then Idx.break_idx info.idx else Idx.idx info.idx)
+       last
    | _ -> ());
   res
 ;;
@@ -434,7 +477,7 @@ let make_match_str re positions ~len ~groups ~partial s ~pos =
     let initial_state =
       let initial_cat =
         Category.(
-          search_boundary
+          start_boundary
           ++ if pos = 0 then inexistant else category re ~color:(get_color re s (pos - 1)))
       in
       find_initial_state re initial_cat
@@ -451,7 +494,7 @@ let make_match_str re positions ~len ~groups ~partial s ~pos =
     ();
     if Idx.is_break state_info.idx
     then Automata.State.status re.mutex state_info.desc
-    else final_boundary_check re positions ~last ~slen s state_info ~groups)
+    else match_after_stop re positions s ~slen ~last state_info ~groups)
 ;;
 
 module Stream = struct
@@ -465,7 +508,7 @@ module Stream = struct
     | No_match
 
   let create re =
-    let category = Category.(search_boundary ++ inexistant) in
+    let category = Category.(start_boundary ++ inexistant) in
     let state = find_initial_state re category in
     { state; re }
   ;;
@@ -491,7 +534,7 @@ module Stream = struct
     let info = State.get_info state in
     match
       let _idx, res =
-        let final_cat = Category.(search_boundary ++ inexistant) in
+        let final_cat = Category.(stop_boundary ++ inexistant) in
         final t.re info final_cat
       in
       res
@@ -613,7 +656,7 @@ module Stream = struct
         | (Match _ | Failed) as s -> s
         | Running ->
           let idx, res =
-            let final_cat = Category.(search_boundary ++ inexistant) in
+            let final_cat = Category.(stop_boundary ++ inexistant) in
             final t.re info final_cat
           in
           (match res with
@@ -773,6 +816,20 @@ let rec translate
         iter (j - i) f (A.eps ids)
     in
     iter i (fun rem -> A.seq ids kind' (A.rename ids cr) rem) rem, kind
+  | Lookahead (pn, t) ->
+    (* Since we don't support captures, and the regular expression is zero width, the
+       match semantics is unobservable. `Shortest and `Non_greedy should be cheaper
+       to evaluate, so we might as well. *)
+    let cr, _kind' =
+      translate { ctx with ign_group = true; greedy = `Non_greedy; kind = `Shortest } t
+    in
+    ( A.lookahead
+        ids
+        (match pn with
+         | `Pos -> Pos
+         | `Neg -> Neg)
+        cr
+    , kind )
   | Beg_of_line -> A.after ids Category.(inexistant ++ newline), kind
   | End_of_line -> A.before ids Category.(inexistant ++ newline), kind
   | Beg_of_word al ->
@@ -804,8 +861,8 @@ let rec translate
   | Beg_of_str -> A.after ids Category.inexistant, kind
   | End_of_str -> A.before ids Category.inexistant, kind
   | Last_end_of_line -> A.before ids Category.(inexistant ++ lastnewline), kind
-  | Start -> A.after ids Category.search_boundary, kind
-  | Stop -> A.before ids Category.search_boundary, kind
+  | Start -> A.after ids Category.start_boundary, kind
+  | Stop -> A.before ids Category.stop_boundary, kind
   | Sem (kind', r') ->
     let cr, kind'' = translate { ctx with kind = kind' } r' in
     enforce_kind ids kind' kind'' cr, kind'

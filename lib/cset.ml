@@ -282,3 +282,8 @@ module Ascii = struct
     union_all [ s; offset 32 (inter s upper); offset (-32) (inter s clower) ]
   ;;
 end
+
+let ascii_or_latin1_cword = function
+  | `Latin1 -> cword
+  | `Ascii -> Ascii.wordc
+;;

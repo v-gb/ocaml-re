@@ -12,9 +12,10 @@ let ascii_letter = 2
 let not_ascii_letter = 4
 let newline = 8
 let lastnewline = 16
-let search_boundary = 32
-let latin1_letter = 64
-let not_latin1_letter = 128
+let start_boundary = 32
+let stop_boundary = 64
+let latin1_letter = 128
+let not_latin1_letter = 256
 let to_dyn = Dyn.int
 
 let from_char = function

@@ -81,6 +81,7 @@ type ('a, 'case) gen =
   | Ast of (('a, 'case) gen, 'case) ast
   | Sequence of ('a, 'case) gen list
   | Repeat of ('a, 'case) gen * int * int option
+  | Lookahead of [ `Pos | `Neg ] * ('a, 'case) gen
   | Beg_of_line
   | End_of_line
   | Beg_of_word of Ascii_or_latin1.t
@@ -111,6 +112,13 @@ let rec dyn_of_gen f =
       | Some x -> [ int x ]
     in
     variant "Repeat" (dyn_of_gen f gen :: int min :: base)
+  | Lookahead (pn, t) ->
+    let pn =
+      match pn with
+      | `Pos -> variant "Pos" []
+      | `Neg -> variant "Neg" []
+    in
+    variant "Lookahead" [ pn; dyn_of_gen f t ]
   | Beg_of_line -> enum "Beg_of_line"
   | End_of_line -> enum "End_of_line"
   | Beg_of_word al -> variant "Beg_of_word" [ Ascii_or_latin1.to_dyn al ]
@@ -227,6 +235,15 @@ let rec to_api cset_to_api t =
             | None -> ident "None"
             | Some n -> call' "Some" [ Int n ])
          ])
+  | Lookahead (pn, t1) ->
+    call'
+      "lookahead"
+      [ ident
+          (match pn with
+           | `Pos -> "`Pos"
+           | `Neg -> "`Neg")
+      ; to_api t1
+      ]
   | Beg_of_line -> ident "bol"
   | End_of_line -> ident "eol"
   | Beg_of_word al -> ident (al_ident al "bow")
@@ -280,6 +297,18 @@ let rec pp_gen pp_cset fmt t =
   | Repeat (re, start, stop) ->
     let pp' fmt () = fprintf fmt "%a@ %d%a" pp re start optint stop in
     sexp fmt "Repeat" pp' ()
+  | Lookahead (pn, t) ->
+    sexp
+      fmt
+      "Lookahead"
+      (fun fmt () ->
+        let pn_string =
+          match pn with
+          | `Pos -> "pos"
+          | `Neg -> "neg"
+        in
+        fprintf fmt "%s@ %a" pn_string pp t)
+      ()
   | Beg_of_line -> str fmt "Beg_of_line"
   | End_of_line -> str fmt "End_of_line"
   | Beg_of_word al -> sexp fmt "Beg_of_word" Ascii_or_latin1.pp al
@@ -372,6 +401,7 @@ let rec handle_case ign_case : t -> (Cset.t, [ `Uncased ]) gen = function
     let l = List.map ~f:(handle_case ign_case) l in
     Ast (Alternative l)
   | Repeat (r, i, j) -> Repeat (handle_case ign_case r, i, j)
+  | Lookahead (pn, r) -> Lookahead (pn, handle_case ign_case r)
   | ( Beg_of_line
     | End_of_line
     | Beg_of_word _
@@ -472,6 +502,7 @@ module Export = struct
   let leol = Last_end_of_line
   let start = Start
   let stop = Stop
+  let lookahead pn r = Lookahead (pn, r)
 
   type 'b f = { f : 'a. 'a -> ('a, 'b) ast }
 
@@ -549,6 +580,7 @@ module Export = struct
         Buffer.contents b
       | No_group r -> witness r
       | Sem_greedy (_, r) | Sem (_, r) | Nest r | Pmark (_, r) | Group (_, r) -> witness r
+      | Lookahead _
       | Beg_of_line
       | End_of_line
       | Beg_of_word _
@@ -585,13 +617,10 @@ let colorize color_map (regexp : no_case) =
     | Sequence l -> List.iter ~f:colorize l
     | Ast (Alternative l) -> List.iter ~f:colorize l
     | Repeat (r, _, _) -> colorize r
+    | Lookahead (_, r) -> colorize r
     | Beg_of_line | End_of_line -> Color_map.split color_map Cset.nl
     | Beg_of_word al | End_of_word al | Not_bound al ->
-      Color_map.split
-        color_map
-        (match al with
-         | `Latin1 -> Cset.cword
-         | `Ascii -> Cset.Ascii.wordc)
+      Color_map.split color_map (Cset.ascii_or_latin1_cword al)
     | Beg_of_str | End_of_str | Start | Stop -> ()
     | Last_end_of_line -> lnl := true
     | No_group r | Group (_, r) | Nest r | Pmark (_, r) -> colorize r
@@ -611,6 +640,10 @@ and anchored : t -> bool = function
   | Repeat (r, i, _) -> i > 0 && anchored r
   | No_group r | Sem (_, r) | Sem_greedy (_, r) | Group (_, r) | Nest r | Pmark (_, r) ->
     anchored r
+  | Lookahead (pn, t) ->
+    (match pn with
+     | `Pos -> anchored t
+     | `Neg -> false)
   | Set _
   | Beg_of_line
   | End_of_line

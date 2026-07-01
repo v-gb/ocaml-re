@@ -171,6 +171,34 @@ end = struct
   let initial = 0
 end
 
+module Pos_or_neg = struct
+  type t =
+    | Pos
+    | Neg
+
+  let to_dyn = function
+    | Pos -> Dyn.variant "Pos" []
+    | Neg -> Dyn.variant "Neg" []
+  ;;
+
+  let pp ch = function
+    | Pos -> Format.fprintf ch "pos"
+    | Neg -> Format.fprintf ch "neg"
+  ;;
+
+  let equal t1 t2 =
+    match t1, t2 with
+    | Pos, Pos | Neg, Neg -> true
+    | (Pos | Neg), _ -> false
+  ;;
+
+  let hash t acc =
+    match t with
+    | Pos -> hash_combine 0 acc
+    | Neg -> hash_combine 1 acc
+  ;;
+end
+
 module Expr = struct
   type t =
     { id : Id.t
@@ -190,6 +218,7 @@ module Expr = struct
     | Before of Category.t
     | After of Category.t
     | Pmark of Pmark.t
+    | Lookahead of Pos_or_neg.t * t
 
   let rec seq_as_list sem t =
     match t.def with
@@ -221,6 +250,7 @@ module Expr = struct
     | Erase (x, y) -> variant "Erase" [ Mark.to_dyn x; Mark.to_dyn y ]
     | Before c -> variant "Before" [ Category.to_dyn c ]
     | After c -> variant "After" [ Category.to_dyn c ]
+    | Lookahead (pn, x) -> variant "Lookahead" [ Pos_or_neg.to_dyn pn; to_dyn x ]
 
   and to_dyn { id = _; def } = dyn_of_def def
 
@@ -237,6 +267,7 @@ module Expr = struct
     | Erase (b, e) -> sexp ch "erase" (pair Mark.pp Mark.pp) (b, e)
     | Before c -> sexp ch "before" Category.pp c
     | After c -> sexp ch "after" Category.pp c
+    | Lookahead (pn, e) -> sexp ch "lookahead" (pair Pos_or_neg.pp pp) (pn, e)
   ;;
 
   let eps_expr = { id = Id.zero; def = Eps }
@@ -250,6 +281,7 @@ module Expr = struct
   let erase ids m m' = mk ids (Erase (m, m'))
   let before ids c = mk ids (Before c)
   let after ids c = mk ids (After c)
+  let lookahead ids pn e = mk ids (Lookahead (pn, e))
 
   let alt ids = function
     | [] -> empty ids
@@ -278,6 +310,7 @@ module Expr = struct
     | Alt l -> mk ids (Alt (List.map ~f:(rename ids) l))
     | Seq (k, y, z) -> mk ids (Seq (k, rename ids y, rename ids z))
     | Rep (g, k, y) -> mk ids (Rep (g, k, rename ids y))
+    | Lookahead (pn, e) -> mk ids (Lookahead (pn, rename ids e))
   ;;
 end
 
@@ -381,11 +414,19 @@ module Desc : sig
       | TSeq of Sem.t * t * Expr.t
       | TExp of Marks.t * Expr.t
       | TMatch of Marks.t
+      | TSide_condition of bool * t * Pos_or_neg.t * t
+    (* TSide_condition (has_match, t1, pn, t2) matches the same way as t1, but only
+       when the side condition t2 also matches (when pn = `Pos) or fails to match (when
+       pn = `Neg). This is a bit like an intersection, but an intersection is symmetric
+       whereas t2 neither consume character not contains marks. [has_match] caches
+       whether t1 has a TMatch or a TSide_condition (true, ...), so we can determine
+       whether there is anything interesting without recursing every time. *)
   end
 
   val to_dyn : t -> Dyn.t
   val fold_right : t -> init:'acc -> f:(E.t -> 'acc -> 'acc) -> 'acc
   val tseq : Sem.t -> t -> Expr.t -> t -> t
+  val tside_condition : t -> Pos_or_neg.t -> t -> t -> t
   val texp : Marks.t -> Expr.t -> t -> t
   val initial : Expr.t -> t
   val empty : t
@@ -393,10 +434,23 @@ module Desc : sig
   val hash : t -> int -> int
   val equal : t -> t -> bool
   val status : t -> Status.t
-  val status_is_ambiguous : t -> ambiguity_mark:Pmark.t -> bool
-  val first_match : t -> Marks.t option
-  val remove_matches : t -> t
-  val split_at_match : t -> t * t
+  val split_at_exact_match : t -> t * t
+
+  val all_quasi_matches_rev
+    :  t
+    -> [ `Match of Marks.t | `Side_condition_match of Marks.t * Pos_or_neg.t * t ] list
+
+  val first_quasi_match : t -> [ `None | `Match of Marks.t | `Side_condition_match ]
+  val remove_quasi_matches : t -> t
+
+  val split_at_quasi_matches_rev
+    :  t
+    -> [ `Match of Marks.t
+       | `Side_condition_match of Marks.t * Pos_or_neg.t * t
+       | `Chunk of t
+       ]
+         list
+
   val add_match : t -> Marks.t -> t
   val add_eps : t -> Marks.t -> t
   val add_expr : t -> E.t -> t
@@ -408,13 +462,16 @@ end = struct
       | TSeq of Sem.t * t list * Expr.t
       | TExp of Marks.t * Expr.t
       | TMatch of Marks.t
+      | TSide_condition of bool * t list * Pos_or_neg.t * t list
     (* [t] is a slight variation of [Expr.t], so we have somewhere to store marks.
 
        TMatch is produced when deriving a regex succeeds without consuming the input
        character. As a result, the derivation proceeds into whatever follows the
        TMatch, which means we have the invariant that TMatch can only show up in the
-       top-most list (i.e. not nested inside a Tseq. This happens because TMatch
-       are dropped via remove_matches or split_at_match or bubble up to the top).
+       top-most list, or nested recursively on the left side of TSide_condition nodes,
+       but never nested instead of a seq. Concretely, this invariant is maintained
+       by having any TSeq construction drop or bubble up TMatch using remove_exact_matches
+       or similar functions.
     *)
 
     let rec equal_list l1 l2 = List.equal ~eq:equal l1 l2
@@ -425,7 +482,13 @@ end = struct
       | TExp (marks1, e1), TExp (marks2, e2) ->
         Id.equal e1.id e2.id && Marks.equal marks1 marks2
       | TMatch marks1, TMatch marks2 -> Marks.equal marks1 marks2
-      | _, _ -> false
+      | TSide_condition (b1, main1, pn1, cond1), TSide_condition (b2, main2, pn2, cond2)
+        ->
+        Bool.equal b1 b2
+        && Pos_or_neg.equal pn1 pn2
+        && equal_list main1 main2
+        && equal_list cond1 cond2
+      | (TSeq _ | TExp _ | TMatch _ | TSide_condition _), _ -> false
     ;;
 
     let rec hash (t : t) accu =
@@ -435,6 +498,8 @@ end = struct
       | TExp (marks, e) ->
         hash_combine 0x2b4c0d77 (hash_combine (Id.hash e.id) (Marks.hash marks accu))
       | TMatch marks -> hash_combine 0x1c205ad5 (Marks.hash marks accu)
+      | TSide_condition (_, l1, pn, l2) ->
+        hash_combine 1 (hash_list l1 (Pos_or_neg.hash pn (hash_list l2 accu)))
 
     and hash_list =
       let f acc x = hash x acc in
@@ -458,6 +523,8 @@ end = struct
       in
       variant "TExp" e
     | TMatch m -> variant "TMatch" [ Marks.to_dyn m ]
+    | TSide_condition (_, t1, pn, t2) ->
+      variant "TSide_condition" [ to_dyn t1; Pos_or_neg.to_dyn pn; to_dyn t2 ]
   ;;
 
   open E
@@ -474,6 +541,38 @@ end = struct
 
   let texp marks e rem = TExp (marks, e) :: rem
 
+  let tside_condition l1 (pn : Pos_or_neg.t) l2 rem =
+    match l1 with
+    | [] -> rem
+    | _ :: _ ->
+      let condition =
+        match l2 with
+        | [] -> Some false
+        | _ ->
+          if List.exists l2 ~f:(function
+               | TMatch _ | TExp (_, { def = Eps; _ }) -> true
+               | _ -> false)
+          then Some true
+          else None
+      in
+      let outcome =
+        match pn with
+        | Pos -> condition
+        | Neg -> Option.map not condition
+      in
+      (match outcome with
+       | None ->
+         let has_match =
+           List.exists l1 ~f:(function
+             | TMatch _ -> true
+             | TSide_condition (has_match, _, _, _) -> has_match
+             | _ -> false)
+         in
+         TSide_condition (has_match, l1, pn, l2) :: rem
+       | Some true -> l1 @ rem
+       | Some false -> rem)
+  ;;
+
   let rec fold_right t ~init ~f =
     match t with
     | [] -> init
@@ -484,7 +583,8 @@ end = struct
     List.iter t ~f:(fun (e : E.t) ->
       match e with
       | TSeq (_, l, _) -> iter_marks l ~f
-      | TExp (marks, _) | TMatch marks -> f marks)
+      | TExp (marks, _) | TMatch marks -> f marks
+      | TSide_condition (_, l1, _, _) -> iter_marks l1 ~f)
   ;;
 
   let rec print_state_rec ch e (y : Expr.t) =
@@ -498,6 +598,12 @@ end = struct
       Format.fprintf ch "@[<2>(TExp@ %a@ (%a)@ (eps))@]" Id.pp y.id Marks.pp marks
     | TExp (marks, x) ->
       Format.fprintf ch "@[<2>(TExp@ %a@ (%a)@ %a)@]" Id.pp x.id Marks.pp marks Expr.pp x
+    | TSide_condition (_, l1, pn, l2) ->
+      Format.fprintf ch "@[<2>(TSide_condition@ ";
+      print_state_lst ch l1 y;
+      Format.fprintf ch "@ %a @ " Pos_or_neg.pp pn;
+      print_state_lst ch l2 y;
+      Format.fprintf ch ")@]"
 
   and print_state_lst ch l y =
     match l with
@@ -511,25 +617,122 @@ end = struct
 
   let pp ch t = print_state_lst ch [ t ] { id = Id.zero; def = Eps }
 
-  let rec first_match = function
-    | [] -> None
-    | TMatch marks :: _ -> Some marks
-    | _ :: r -> first_match r
-  ;;
-
-  let remove_matches t =
-    List.filter t ~f:(function
-      | TMatch _ -> false
-      | _ -> true)
-  ;;
-
-  let split_at_match =
-    let rec split_at_match_rec l = function
+  let split_at_exact_match =
+    let rec split_at_exact_match_rec l = function
       | [] -> assert false
-      | TMatch _ :: r -> List.rev l, remove_matches r
-      | x :: r -> split_at_match_rec (x :: l) r
+      | TMatch _ :: r -> List.rev l, r
+      | x :: r -> split_at_exact_match_rec (x :: l) r
     in
-    fun l -> split_at_match_rec [] l
+    fun l -> split_at_exact_match_rec [] l
+  ;;
+
+  let rec first_quasi_match = function
+    | [] -> `None
+    | TMatch marks :: _ -> `Match marks
+    | TSide_condition (true, _, _, _) :: _ -> `Side_condition_match
+    | _ :: rem -> first_quasi_match rem
+  ;;
+
+  let flatten_side_condition
+    (inner_pn : Pos_or_neg.t)
+    (inner_cond : t list)
+    (outer_pn : Pos_or_neg.t)
+    outer_cond
+    : Pos_or_neg.t * t list
+    =
+    (*
+       ((e assuming a) assuming b) => (e assuming (a assuming b))
+       ((e assuming not a) assuming b) => (e assuming (b assuming not a))
+       ((e assuming a) assuming not b) => (e assuming (a assuming not b))
+       ((e assuming not a) assuming not b) => (e assuming not (a or b))
+       When e is a TMatch, this is useful to bubble up the TMatch during derivation.
+    *)
+    match inner_pn, outer_pn with
+    | Pos, (Pos | Neg) -> inner_pn, tside_condition inner_cond outer_pn outer_cond []
+    | Neg, Pos -> outer_pn, tside_condition outer_cond inner_pn inner_cond []
+    | Neg, Neg -> Neg, inner_cond @ outer_cond
+  ;;
+
+  let rec all_quasi_matches_rev acc = function
+    | [] -> acc
+    | TMatch marks :: _ -> `Match marks :: acc
+    | TSide_condition (true, t1, pn, t2) :: tl ->
+      (* here I went the way of supporting nested side_conditions. But another
+         possibility would have been, when deriving TSide_conditions, to lift
+         out any inner TSide_condition. That would create duplication of
+         the side condition on either side, which means we may want to merge
+         them afterwards. In some sense, the deep version here might be the
+         equivalent of having ropes in the ast. *)
+      let sub_matches_rev =
+        all_quasi_matches_rev [] t1
+        |> List.map ~f:(function
+          | `Match marks -> `Side_condition_match (marks, pn, t2)
+          | `Side_condition_match (marks, pn', t2') ->
+            let pn_final, t2_final = flatten_side_condition pn' t2' pn t2 in
+            `Side_condition_match (marks, pn_final, t2_final))
+      in
+      all_quasi_matches_rev (sub_matches_rev @ acc) tl
+    | _ :: tl -> all_quasi_matches_rev acc tl
+  ;;
+
+  let all_quasi_matches_rev t = all_quasi_matches_rev [] t
+
+  let[@tail_mod_cons] rec remove_quasi_matches = function
+    | [] -> []
+    | TMatch _ :: rest -> remove_quasi_matches rest
+    | TSide_condition (true, t1, pn, t2) :: rest ->
+      (match remove_quasi_matches t1 with
+       | [] -> remove_quasi_matches rest
+       | _ :: _ as t1 -> TSide_condition (false, t1, pn, t2) :: remove_quasi_matches rest)
+    | elt :: rest -> elt :: remove_quasi_matches rest
+  ;;
+
+  (* not sure why that's worse, maybe should confirm on a more stable bench machine *)
+  (* let remove_quasi_matches t = *)
+  (*   List.filter_map t ~f:(function *)
+  (*     | TMatch _ -> None *)
+  (*     | TSide_condition (l, pn, l2) when has_exact_match l -> *)
+  (*       (match remove_exact_matches l with *)
+  (*        | [] -> None *)
+  (*        | _ :: _ as l -> Some (TSide_condition (l, pn, l2))) *)
+  (*     | elt -> Some elt) *)
+  (* ;; *)
+
+  let split_at_quasi_matches_rev =
+    let rec loop acc chunk = function
+      | [] -> if List.is_empty chunk then acc else `Chunk (List.rev chunk) :: acc
+      | TMatch marks :: rest ->
+        let acc = if List.is_empty chunk then acc else `Chunk (List.rev chunk) :: acc in
+        let acc = `Match marks :: acc in
+        let rest = remove_quasi_matches rest in
+        if List.is_empty rest then acc else `Chunk rest :: acc
+      | TSide_condition (true, l1, pn, l2) :: rest ->
+        let subchunks =
+          loop [] [] l1
+          |> List.rev_map ~f:(function
+            | `Chunk l1 -> `Chunk [ TSide_condition (false, l1, pn, l2) ]
+            | `Match marks -> `Side_condition_match (marks, pn, l2)
+            | `Side_condition_match (marks, pn', l2') ->
+              let pn_final, t2_final = flatten_side_condition pn' l2' pn l2 in
+              `Side_condition_match (marks, pn_final, t2_final))
+        in
+        let subchunks =
+          if List.is_empty chunk
+          then subchunks
+          else (
+            match subchunks with
+            | `Chunk l :: rest -> `Chunk (List.rev_append chunk l) :: rest
+            | rest -> `Chunk (List.rev chunk) :: rest)
+        in
+        let subchunks_rev, chunk =
+          match List.rev subchunks with
+          | `Chunk l :: rest -> rest, List.rev l
+          | rest -> rest, []
+        in
+        loop (subchunks_rev @ acc) chunk rest
+      | elt :: rest -> loop acc (elt :: chunk) rest
+    in
+    fun t -> loop [] [] t
   ;;
 
   let status : _ -> Status.t = function
@@ -538,17 +741,12 @@ end = struct
     | _ -> Running
   ;;
 
-  let status_is_ambiguous t ~ambiguity_mark =
-    match t with
-    | TMatch m :: _ -> Pmark.Set.mem ambiguity_mark m.pmarks
-    | _ -> false
-  ;;
-
   let set_idx =
     let rec f idx = function
       | TMatch marks -> TMatch (Marks.marks_set_idx marks idx)
       | TSeq (kind, l, x) -> TSeq (kind, set_idx idx l, x)
       | TExp (marks, x) -> TExp (Marks.marks_set_idx marks idx, x)
+      | TSide_condition (n, l1, pn, l2) -> TSide_condition (n, set_idx idx l1, pn, l2)
     and set_idx idx xs = List.map xs ~f:(f idx) in
     set_idx
   ;;
@@ -590,6 +788,13 @@ end = struct
         else (
           Id.Hash_set.add seen x.id;
           e :: loop seen r y)
+      | TSide_condition (_, l1, pn, l2) :: r when true (* XXX unlikely to be ideal!! *) ->
+        tside_condition l1 pn l2 r
+      | TSide_condition (_, l1, pn, l2) :: r ->
+        let l1 = loop seen l1 y in
+        let l2 = loop seen l2 y in
+        let r = loop seen r y in
+        tside_condition l1 pn l2 r
     in
     fun seen l y ->
       Id.Hash_set.clear seen;
@@ -723,7 +928,7 @@ type ctx =
       }
   | Advance of
       { prev_cat : Category.t
-      ; ambiguity_mark : Pmark.t
+      ; how : [ `Partial | `At_match_stop of Category.t ]
       }
 
 let rec delta_expr ctx marks (x : Expr.t) rem =
@@ -744,10 +949,20 @@ let rec delta_expr ctx marks (x : Expr.t) rem =
   | Erase (b, e) -> Desc.add_match rem (Marks.filter marks b e)
   | Before cat ->
     (match ctx with
-     | Delta { next_cat; _ } ->
+     | Delta { next_cat; _ } | Advance { how = `At_match_stop next_cat; _ } ->
        if Category.intersect next_cat cat then Desc.add_match rem marks else rem
-     | Advance { ambiguity_mark; _ } ->
-       Desc.add_match rem (Marks.set_pmark marks ambiguity_mark))
+     | Advance { how = `Partial; _ } ->
+       (* We can't simply return Desc.texp, because in the Advance case, we need to
+          preserve the invariant that if some regex could be a Match, then it must be
+          a Match. If we don't, then we can end up with
+          Seq `Shortest [ could_be_a_match; match ] rest, which would become
+          [ rest (with the bindings from match); Seq `Shortest could_be_a_match rest ],
+          ie we reordered the two branches incorrectly. *)
+       Desc.tside_condition
+         (Desc.add_match Desc.empty marks)
+         Pos
+         (Desc.texp marks x Desc.empty)
+         rem)
   | After cat ->
     let prev_cat =
       match ctx with
@@ -755,30 +970,73 @@ let rec delta_expr ctx marks (x : Expr.t) rem =
       | Advance { prev_cat; _ } -> prev_cat
     in
     if Category.intersect prev_cat cat then Desc.add_match rem marks else rem
+  | Lookahead (pn, e) ->
+    Desc.tside_condition
+      (Desc.add_match Desc.empty marks)
+      pn
+      (delta_expr ctx Marks.empty e Desc.empty)
+      rem
 
 and delta_rep ctx marks x rep_kind kind y rem =
-  let y, marks' =
-    let y = delta_expr ctx marks y Desc.empty in
-    match Desc.first_match y with
-    | None -> y, marks
-    | Some marks -> Desc.remove_matches y, marks
-  in
   match rep_kind with
-  | `Greedy -> Desc.tseq kind y x (Desc.add_match rem marks')
-  | `Non_greedy -> Desc.add_match (Desc.tseq kind y x rem) marks
+  | `Non_greedy ->
+    let y = Desc.remove_quasi_matches (delta_expr ctx marks y Desc.empty) in
+    Desc.add_match (Desc.tseq kind y x rem) marks
+  | `Greedy ->
+    let y = delta_expr ctx marks y Desc.empty in
+    let matches_rev = Desc.all_quasi_matches_rev y in
+    let non_matches =
+      match matches_rev with
+      | [] -> y
+      | _ :: _ -> Desc.remove_quasi_matches y
+    in
+    let rem =
+      match matches_rev with
+      | `Match _ :: _ -> rem
+      | _ -> Desc.add_match rem marks
+    in
+    let rem =
+      List.fold_left ~init:rem matches_rev ~f:(fun rem ->
+          function
+          | `Match marks -> Desc.add_match rem marks
+          | `Side_condition_match (marks, pn, l2) ->
+            Desc.tside_condition (Desc.add_match Desc.empty marks) pn l2 rem)
+    in
+    Desc.tseq kind non_matches x rem
 
 and delta_alt ctx marks l rem = List.fold_right l ~init:rem ~f:(delta_expr ctx marks)
 
 and delta_seq ctx (kind : Sem.t) y z rem =
-  match Desc.first_match y with
-  | None -> Desc.tseq kind y z rem
-  | Some marks ->
+  match Desc.first_quasi_match y with
+  | `None -> Desc.tseq kind y z rem
+  | `Match marks ->
     (match kind with
-     | `Longest -> Desc.tseq kind (Desc.remove_matches y) z (delta_expr ctx marks z rem)
-     | `Shortest -> delta_expr ctx marks z (Desc.tseq kind (Desc.remove_matches y) z rem)
+     | `Longest ->
+       Desc.tseq kind (Desc.remove_quasi_matches y) z (delta_expr ctx marks z rem)
+     | `Shortest ->
+       delta_expr ctx marks z (Desc.tseq kind (Desc.remove_quasi_matches y) z rem)
      | `First ->
-       let y, y' = Desc.split_at_match y in
-       Desc.tseq kind y z (delta_expr ctx marks z (Desc.tseq kind y' z rem)))
+       let y, y' = Desc.split_at_exact_match y in
+       Desc.tseq
+         kind
+         y
+         z
+         (delta_expr ctx marks z (Desc.tseq kind (Desc.remove_quasi_matches y') z rem)))
+  | `Side_condition_match ->
+    let f rem = function
+      | `Chunk t -> Desc.tseq kind t z rem
+      | `Match marks -> delta_expr ctx marks z rem
+      | `Side_condition_match (marks, pn, l2) ->
+        Desc.tside_condition (delta_expr ctx marks z Desc.empty) pn l2 rem
+    in
+    (match kind with
+     | (`Longest | `Shortest) as kind ->
+       let matches_rev = Desc.all_quasi_matches_rev y in
+       let non_matches = Desc.remove_quasi_matches y in
+       (match kind with
+        | `Shortest -> List.fold_left matches_rev ~init:(f rem (`Chunk non_matches)) ~f
+        | `Longest -> f (List.fold_left matches_rev ~init:rem ~f) (`Chunk non_matches))
+     | `First -> List.fold_left ~init:rem ~f (Desc.split_at_quasi_matches_rev y))
 ;;
 
 let rec delta_e ctx (x : E.t) rem =
@@ -788,6 +1046,12 @@ let rec delta_e ctx (x : E.t) rem =
     delta_seq ctx kind y z rem
   | TExp (marks, e) -> delta_expr ctx marks e rem
   | TMatch _ -> Desc.add_expr rem x
+  | TSide_condition (_, l1, pn, l2) ->
+    Desc.tside_condition
+      (delta_desc ctx l1 Desc.empty)
+      pn
+      (delta_desc ctx l2 Desc.empty)
+      rem
 
 and delta_desc ctx (l : Desc.t) rem =
   Desc.fold_right l ~init:rem ~f:(fun y acc -> delta_e ctx y acc)
@@ -813,40 +1077,25 @@ let delta (tbl_ref : Working_area.t) next_cat char (st : State.t) =
    is fine because we feed in an eos character (in final_advance) if necessary. For
    exec_partial though, it means we'd return `Prefix too conservatively. So here we
    advance through all epsilon transitions, so that we can detect a match or a mismatch
-   without waiting for an extra character.
-
-   The wrinkle in this story is lookaheads, i.e. Before. We can't treat them as matches,
-   otherwise [exec_partial eol ""] would incorrectly say `Full. We can't leave them
-   unchanged, otherwise [exec_partial (shortest (alt [ eos; group bos ])) ""] would
-   return [`Full (second branch)], when the eos branch can also match.
-
-   Without implementing full-blown lookaheads, a solution that's enough for exec_partial
-   can be found by noticing that:
-   - if the looahead matches, the re that follows it ends up at a certain place in the
-     resulting desc
-   - if the lookahead doesn't match, that same place would hold a lower priority re that
-     was shadowed by the lookahead match, or nothing if there is no lower priority re.
-
-   This means that we can assume the lookahead matches, and if the resulting
-   Desc.status doesn't depend on that assumption (which we track using this
-   ambiguity_mark), then it means this status is independent of the lookahead. If we
-   find the ambiguity mark, then obviously the result depends on the lookahead, so we
-   can't use it.
-
-   Do not compute more transitions from the resulting state! Even when the status
-   is not ambiguous, the desc can still contain assumptions. *)
-let advance (tbl_ref : Working_area.t) (st : State.t) =
+   without waiting for an extra character. *)
+let advance (tbl_ref : Working_area.t) how (st : State.t) =
   let expr =
-    let ambiguity_mark = Pmark.gen () in
     let prev_cat = st.category in
-    let ctx = Advance { prev_cat; ambiguity_mark } in
-    let desc =
-      Desc.remove_duplicates
-        tbl_ref.seen
-        (delta_desc ctx st.desc Desc.empty)
-        Expr.eps_expr
-    in
-    if Desc.status_is_ambiguous desc ~ambiguity_mark then st.desc else desc
+    let ctx = Advance { prev_cat; how } in
+    Desc.remove_duplicates tbl_ref.seen (delta_desc ctx st.desc Desc.empty) Expr.eps_expr
+  in
+  let expr =
+    match how with
+    | `Partial -> expr
+    | `At_match_stop _ ->
+      (* At the match boundary, we only keep matches and side matches. This way, we
+         know we can't create further matches, but we can keep reading more text to
+         satisfy/dissatisify lookaheads. *)
+      List.fold_left (Desc.all_quasi_matches_rev expr) ~init:Desc.empty ~f:(fun acc ->
+          function
+          | `Match marks -> Desc.add_match acc marks
+          | `Side_condition_match (marks, pn, l2) ->
+            Desc.tside_condition (Desc.add_match Desc.empty marks) pn l2 acc)
   in
   create_state tbl_ref st.category expr
 ;;

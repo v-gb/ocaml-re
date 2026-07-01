@@ -586,6 +586,17 @@ val not_boundary : t
 (** Only matches the whole string, i.e. [fun t -> seq [ bos; t; eos ]]. *)
 val whole_string : t -> t
 
+(** [lookahead `Pos t] successfully matches at a position when [t] matches at that
+    position, but unlike [t], it consumes no character. [lookahead `Neg t] is the same,
+    but matches when [t] doesn't match. This is effectively a generalization of [eol],
+    [eos], etc.
+
+    [t] can be any arbitrary regex, although groups are ignored.
+
+    As with the other combinators of the library, this has linear time complexity
+    in the length of the input. *)
+val lookahead : [ `Pos | `Neg ] -> t -> t
+
 (** {2 Match semantics}
 
     A regular expression frequently matches a string in multiple ways.  For

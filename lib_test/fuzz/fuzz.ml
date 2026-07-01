@@ -25,6 +25,7 @@ module Ctx = struct
   type t =
     { counter : int ref
     ; nested_stars : int
+    ; in_lookahead : bool
     }
 end
 
@@ -100,6 +101,7 @@ let re_gen =
                  let r = Re.rep (r { ctx with nested_stars = ctx.nested_stars + 1 }) in
                  if greedy then Re.greedy r else Re.non_greedy r)
              ; C.map [ self ] (fun r (ctx : Ctx.t) ->
+                 C.guard (not ctx.in_lookahead);
                  let name =
                    (* Names don't influence behavior, so we force specific names instead
                       of wasting fuzzing time on different names. *)
@@ -125,11 +127,15 @@ let re_gen =
                  ; C.const (fun (_ctx : Ctx.t) -> Re.start)
                  ; C.const (fun (_ctx : Ctx.t) -> Re.stop)
                  ]
+             ; C.map [ C.bool; self ] (fun b r (ctx : Ctx.t) ->
+                 let pn = if b then `Pos else `Neg in
+                 Re.lookahead pn (r { ctx with in_lookahead = true }))
              ])
        ]
        (fun f ->
          let group_counter = ref 0 in
-         group_counter, f { counter = group_counter; nested_stars = 0 }))
+         ( group_counter
+         , f { counter = group_counter; nested_stars = 0; in_lookahead = false } )))
 ;;
 
 module Compare_to_reference = struct
@@ -137,6 +143,7 @@ module Compare_to_reference = struct
     { str : string
     ; start : int
     ; stop : int
+    ; exceed_start_stop : bool
     ; rep : Re.View.Rep_kind.t
     }
 
@@ -173,7 +180,10 @@ module Compare_to_reference = struct
   let peek_behind ctx pos = peek_ahead ctx (pos - 1)
 
   let consume_byte ctx pos =
-    if pos < ctx.start || pos >= ctx.stop then None else Some (ctx.str.[pos], pos + 1)
+    if (pos < if ctx.exceed_start_stop then 0 else ctx.start)
+       || pos >= if ctx.exceed_start_stop then String.length ctx.str else ctx.stop
+    then None
+    else Some (ctx.str.[pos], pos + 1)
   ;;
 
   let wordc = function
@@ -186,6 +196,12 @@ module Compare_to_reference = struct
     match l with
     | [] -> k acc
     | hd :: tl -> f acc hd (fun acc -> fold_left f acc tl k)
+  ;;
+
+  let has_one_success f =
+    match f (fun _state -> raise_notrace Exit) with
+    | exception Exit -> true
+    | _ -> false
   ;;
 
   let find_success (type a) f =
@@ -267,6 +283,12 @@ module Compare_to_reference = struct
               k (if state.pos = state2.pos then 1 else 2) state2))
           (fun state2 ->
             if state.pos = state2.pos then k state2 else reference r ctx state2 k)
+      | Lookahead (pn, r) ->
+        (match
+           pn, has_one_success (reference r { ctx with exceed_start_stop = true } state)
+         with
+         | `Pos, false | `Neg, true -> ()
+         | `Pos, true | `Neg, false -> k state)
       | Beg_of_line ->
         (match peek_behind ctx state.pos with
          | Some '\n' | None -> k state
@@ -337,7 +359,7 @@ module Compare_to_reference = struct
     find_success
       (reference
          (Re.seq [ Re.non_greedy (Re.rep Re.any); Re.group ~name:(group_name 0) re ])
-         { str; start; stop; rep = `Greedy }
+         { str; start; stop; rep = `Greedy; exceed_start_stop = false }
          { pos; matches = String_map.empty })
     |> Option.map (fun state -> state.matches)
   ;;
@@ -380,7 +402,10 @@ module Compare_to_reference = struct
     C.add_test
       ~name:"compare_to_reference_sub"
       [ re_gen; string_gen_dyn ~min:2 6 ]
-      (fun re input -> same_execution re input ~pos:1 ~len:(String.length input - 2));
+      (fun re input ->
+        let pos = 2 in
+        let len = Int.max 0 (String.length input - pos - 2) in
+        same_execution re input ~pos ~len);
     ()
   ;;
 
@@ -441,7 +466,7 @@ end
 
 let () =
   Compare_to_reference.add_test ();
-  if false then Exec_partial.add_test ()
+  Exec_partial.add_test ()
 ;;
 
 (* Currently, this fuzzing is run manually, it's not plugged into dune or CI or anything.

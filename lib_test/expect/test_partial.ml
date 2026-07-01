@@ -35,6 +35,14 @@ let%expect_test "partial matches" =
   [%expect {| `Mismatch |}];
   t (seq [ str "ab"; eos ]) "ab";
   [%expect {| `Partial |}];
+  t (alt [ group bol; eol ]) "";
+  [%expect {| `Full |}];
+  t (shortest (alt [ group bol; eol ])) "";
+  [%expect {| `Full |}];
+  t (alt [ group eol; bol ]) "";
+  [%expect {| `Partial |}];
+  t (shortest (alt [ group eol; bol ])) "";
+  [%expect {| `Partial |}];
   ()
 ;;
 
@@ -77,6 +85,14 @@ let%expect_test "partial detailed" =
   t (seq [ str "ab"; bos ]) "ab";
   [%expect {| `Mismatch |}];
   t (seq [ str "ab"; eos ]) "ab";
+  [%expect {| `Partial 0 |}];
+  t (alt [ group bol; eol ]) "";
+  [%expect {| `Full [|0,0,"";0,0,""|] |}];
+  t (shortest (alt [ group bol; eol ])) "";
+  [%expect {| `Full [|0,0,"";0,0,""|] |}];
+  t (alt [ group eol; bol ]) "";
+  [%expect {| `Partial 0 |}];
+  t (shortest (alt [ group eol; bol ])) "";
   [%expect {| `Partial 0 |}];
   ()
 ;;

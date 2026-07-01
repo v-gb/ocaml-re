@@ -13,7 +13,8 @@ val ascii_letter : t
 val not_ascii_letter : t
 val newline : t
 val lastnewline : t
-val search_boundary : t
+val start_boundary : t
+val stop_boundary : t
 val latin1_letter : t
 val not_latin1_letter : t
 val letter : [ `Ascii | `Latin1 ] -> t

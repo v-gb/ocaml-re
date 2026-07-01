@@ -87,6 +87,15 @@ module Rep_kind : sig
   val pp : t Fmt.t
 end
 
+module Pos_or_neg : sig
+  type t =
+    | Pos
+    | Neg
+
+  val to_dyn : t -> Dyn.t
+  val pp : t Fmt.t
+end
+
 type expr
 
 val is_eps : expr -> bool
@@ -111,6 +120,7 @@ val erase : Ids.t -> Mark.t -> Mark.t -> expr
 val before : Ids.t -> Category.t -> expr
 val after : Ids.t -> Category.t -> expr
 val rename : Ids.t -> expr -> expr
+val lookahead : Ids.t -> Pos_or_neg.t -> expr -> expr
 
 (****)
 
@@ -155,4 +165,9 @@ module Working_area : sig
 end
 
 val delta : Working_area.t -> Category.t -> Cset.c -> State.t -> State.t
-val advance : Working_area.t -> State.t -> State.t
+
+val advance
+  :  Working_area.t
+  -> [ `Partial | `At_match_stop of Category.t ]
+  -> State.t
+  -> State.t
