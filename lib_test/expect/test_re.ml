@@ -210,6 +210,40 @@ let%expect_test "lookahead" =
   [%expect {| [| (0, 0); (0, 0) |] |}]
 ;;
 
+let%expect_test "lookbehind" =
+  test_re (seq [ rep (str "c"); lookbehind `Pos (str "c") ]) "cc";
+  [%expect {| [| (0, 2) |] |}];
+  test_re (seq [ rep (str "c"); lookbehind `Pos (str "c") ]) "";
+  [%expect {| Not_found |}];
+  test_re (seq [ opt (str "c"); lookbehind `Pos (str "c") ]) "cc";
+  [%expect {| [| (0, 1) |] |}];
+  (* Avoid running multiple of the same lookbehind. *)
+  let re =
+    Re.(
+      seq
+        [ lookbehind `Pos (str "a")
+        ; any
+        ; lookbehind `Neg (str "a")
+        ; lookbehind `Neg (str "bb")
+        ])
+  in
+  test_re re "zaab";
+  [%expect {| [| (3, 4) |] |}];
+  print_dyn (Re_private.Compile.to_dyn (Re.compile re));
+  [%expect
+    {|
+    ((expr
+      (Seq:S (Rep:GF ((0 2)))
+       (Seq:F (Mark 0)
+        (Seq:F (Lookbehind Pos 1 0) ((0 2)) (Lookbehind Neg 1 0)
+         (Lookbehind Neg (Seq:F 2 2) 1))
+        (Mark 1))))
+     (how_far_to_look_back (Some 1))
+     (lookbehinds
+      ((0 (Seq:F (Rep:NS ((0 2))) 1)) (1 (Seq:F (Rep:NS ((0 2))) 2 2)))))
+    |}]
+;;
+
 let%expect_test "default match semantics" =
   test_re (seq [ rep (alt [ char 'a'; char 'b' ]); char 'b' ]) "aabaab";
   [%expect {| [| (0, 6) |] |}];

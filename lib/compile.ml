@@ -40,7 +40,8 @@ type 'state state_info =
        If [idx] is set to [break] for states that either always
        succeed or always fail. *)
     mutable final : (Category.t * (Automata.Idx.t * Automata.Status.t)) list
-  ; mutable advance : ([ `Partial | `At_match_stop of Category.t ] * 'state) list
+  ; mutable advance :
+      ([ `Partial | `At_match_stop of Category.t | `At_match_start ] * 'state) list
   ; (* Mapping from the category of the next character to
        - the index where the next position should be saved
        - possibly, the list of marks (and the corresponding indices)
@@ -107,7 +108,7 @@ end
 
 (* Automata (compiled regular expression) *)
 type re =
-  { initial : Automata.expr
+  { initial : Automata.Initial_expr.t
   ; (* The whole regular expression *)
     mutable initial_states : (Category.t * State.t) list
   ; (* Initial states, indexed by initial category *)
@@ -142,16 +143,16 @@ type re =
    to allocate a fresh working area whenever needed.
 *)
 
-let pp_re ch re = Automata.pp ch re.initial
+let pp_re ch re = Automata.pp ch re.initial.expr
 
 let to_dyn ?(color_map = false) re =
   if color_map
   then
     Dyn.record
-      [ "initial", Automata.to_dyn re.initial
+      [ "initial", Automata.to_dyn re.initial.expr
       ; "color_map", Color_map.Table.to_dyn re.colors
       ]
-  else Automata.to_dyn re.initial
+  else Automata.Initial_expr.to_dyn re.initial
 ;;
 
 let group_count re = re.group_count
@@ -430,6 +431,26 @@ let final_boundary_check re positions ~last ~slen s state_info ~groups =
   res
 ;;
 
+let match_until_start re positions s ~start ~groups =
+  let pos = max 0 (start - Option.value re.initial.how_far_to_look_back ~default:start) in
+  let st =
+    let initial_cat =
+      let cat =
+        if pos = 0
+        then Category.inexistant
+        else category re ~color:(get_color re s (pos - 1))
+      in
+      if pos = start then Category.(start_boundary ++ cat) else cat
+    in
+    find_initial_state re initial_cat
+  in
+  let st = scan_str re positions s st ~pos ~last:start ~groups in
+  let info = State.get_info st in
+  assert (not (Idx.is_break info.idx));
+  (* advance won't execute anything, so there should be no need to update positions *)
+  advance re info `At_match_start
+;;
+
 let match_after_stop re positions s ~slen ~last state_info ~groups =
   let st =
     let category =
@@ -473,17 +494,8 @@ let final_advance re positions ~last state_info ~groups =
 let make_match_str re positions ~len ~groups ~partial s ~pos =
   let slen = String.length s in
   let last = if len = -1 then slen else pos + len in
-  let st =
-    let initial_state =
-      let initial_cat =
-        Category.(
-          start_boundary
-          ++ if pos = 0 then inexistant else category re ~color:(get_color re s (pos - 1)))
-      in
-      find_initial_state re initial_cat
-    in
-    scan_str re positions s initial_state ~pos ~last ~groups
-  in
+  let st = match_until_start re positions s ~start:pos ~groups in
+  let st = scan_str re positions s st ~pos ~last ~groups in
   let state_info = State.get_info st in
   if partial
   then (
@@ -830,6 +842,17 @@ let rec translate
          | `Neg -> Neg)
         cr
     , kind )
+  | Lookbehind (pn, t) ->
+    let cr, _kind' =
+      translate { ctx with ign_group = true; greedy = `Non_greedy; kind = `Shortest } t
+    in
+    ( A.lookbehind
+        ids
+        (match pn with
+         | `Pos -> Pos
+         | `Neg -> Neg)
+        cr
+    , kind )
   | Beg_of_line -> A.after ids Category.(inexistant ++ newline), kind
   | End_of_line -> A.before ids Category.(inexistant ++ newline), kind
   | Beg_of_word al ->
@@ -914,19 +937,26 @@ let compile_1 regexp =
   let lnl = if need_lnl then Cset.of_int ncolor else Cset.null_char in
   let ncolor = if need_lnl then ncolor + 1 else ncolor in
   let ctx =
+    let cache = ref Cset.CSetMap.empty in
     { ids = A.Ids.create ()
     ; kind = `First
     ; ign_group = false
     ; greedy = `Greedy
     ; pos = ref A.Mark.start
     ; names = ref []
-    ; cache = ref Cset.CSetMap.empty
+    ; cache
     ; colors
     ; boundary_table
     }
   in
   let r, kind = translate ctx regexp in
   let r = enforce_kind ctx.ids `First kind r in
+  let r =
+    Automata.Initial_expr.create
+      r
+      ctx.ids
+      ~canycolor:(trans_set ctx.cache colors boundary_table Cset.cany)
+  in
   (*Format.eprintf "<%d %d>@." !ids ncol;*)
   mk_re
     ~initial:r

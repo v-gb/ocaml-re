@@ -23,6 +23,7 @@ type ('a, 'case) gen = private
   | Sequence of ('a, 'case) gen list
   | Repeat of ('a, 'case) gen * int * int option
   | Lookahead of [ `Pos | `Neg ] * ('a, 'case) gen
+  | Lookbehind of [ `Pos | `Neg ] * ('a, 'case) gen
   | Beg_of_line
   | End_of_line
   | Beg_of_word of Ascii_or_latin1.t
@@ -92,6 +93,7 @@ module Export : sig
   val start : t
   val eol : t
   val lookahead : [ `Pos | `Neg ] -> t -> t
+  val lookbehind : [ `Pos | `Neg ] -> t -> t
   val opt : t -> t
   val rep : t -> t
   val rep1 : t -> t

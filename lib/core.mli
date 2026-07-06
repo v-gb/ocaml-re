@@ -597,6 +597,19 @@ val whole_string : t -> t
     in the length of the input. *)
 val lookahead : [ `Pos | `Neg ] -> t -> t
 
+(** [lookbehind `Pos t] successfully matches at s position when [t] has a match that
+    ends at that position. Unlike [t], a lookbehind consumes no character.  [lookbehind
+    `Neg t] is the same, but matches when [t] doesn't match. This is effectively a
+    generalization of bol, bos, etc.
+
+    [t] can be any arbitrary regex, although groups are ignored.
+
+    As with the other combinators of the library, this has linear time complexity
+    in input length. With unbounded lookbehinds, iterated search can be quadratic in
+    input length, but that's already the case (e.g. "a*b|." on 1GB of "a" with first
+    match semantics). This could be made linear, should the need arise. *)
+val lookbehind : [ `Pos | `Neg ] -> t -> t
+
 (** {2 Match semantics}
 
     A regular expression frequently matches a string in multiple ways.  For

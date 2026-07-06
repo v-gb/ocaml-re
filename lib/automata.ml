@@ -70,6 +70,16 @@ end = struct
   ;;
 end
 
+module Int_map = struct
+  include Map.Make (Int)
+
+  let to_dyn a_to_dyn t =
+    bindings t
+    |> List.map ~f:(fun (k, a) -> Dyn.pair (Dyn.int k) (a_to_dyn a))
+    |> Dyn.list
+  ;;
+end
+
 module Id = Ids.Id
 
 module Sem = struct
@@ -89,6 +99,13 @@ module Sem = struct
     | `Shortest -> "S"
     | `Longest -> "L"
     | `First -> "F"
+  ;;
+
+  let hash t acc =
+    match t with
+    | `Longest -> hash_combine 0 acc
+    | `Shortest -> hash_combine 1 acc
+    | `First -> hash_combine 2 acc
   ;;
 
   let to_dyn t = Dyn.enum (to_string t)
@@ -112,7 +129,14 @@ module Rep_kind = struct
     | `Non_greedy -> "N"
   ;;
 
+  let hash t acc =
+    match t with
+    | `Greedy -> hash_combine 0 acc
+    | `Non_greedy -> hash_combine 1 acc
+  ;;
+
   let to_dyn t = Dyn.enum (to_string t)
+  let equal = Poly.equal
   let pp fmt t = Format.pp_print_string fmt (to_string t)
 end
 
@@ -121,6 +145,7 @@ module Mark : sig
 
   val compare : t -> t -> int
   val equal : t -> t -> bool
+  val hash : t -> int -> int
   val pp : t Fmt.t
   val to_dyn : t -> Dyn.t
   val start : t
@@ -134,6 +159,7 @@ end = struct
 
   let equal = Int.equal
   let compare = Int.compare
+  let hash t acc = hash_combine t acc
   let pp = Format.pp_print_int
   let to_dyn = Dyn.int
   let start = 0
@@ -197,6 +223,12 @@ module Pos_or_neg = struct
     | Pos -> hash_combine 0 acc
     | Neg -> hash_combine 1 acc
   ;;
+
+  let apply t b =
+    match t with
+    | Pos -> b
+    | Neg -> not b
+  ;;
 end
 
 module Expr = struct
@@ -219,6 +251,7 @@ module Expr = struct
     | After of Category.t
     | Pmark of Pmark.t
     | Lookahead of Pos_or_neg.t * t
+    | Lookbehind of Pos_or_neg.t * t * int
 
   let rec seq_as_list sem t =
     match t.def with
@@ -251,6 +284,8 @@ module Expr = struct
     | Before c -> variant "Before" [ Category.to_dyn c ]
     | After c -> variant "After" [ Category.to_dyn c ]
     | Lookahead (pn, x) -> variant "Lookahead" [ Pos_or_neg.to_dyn pn; to_dyn x ]
+    | Lookbehind (pn, x, id) ->
+      variant "Lookbehind" [ Pos_or_neg.to_dyn pn; to_dyn x; Dyn.int id ]
 
   and to_dyn { id = _; def } = dyn_of_def def
 
@@ -268,6 +303,8 @@ module Expr = struct
     | Before c -> sexp ch "before" Category.pp c
     | After c -> sexp ch "after" Category.pp c
     | Lookahead (pn, e) -> sexp ch "lookahead" (pair Pos_or_neg.pp pp) (pn, e)
+    | Lookbehind (pn, e, id) ->
+      sexp ch "lookbehind" (triple Pos_or_neg.pp pp int) (pn, e, id)
   ;;
 
   let eps_expr = { id = Id.zero; def = Eps }
@@ -298,6 +335,8 @@ module Expr = struct
     | _ -> mk ids (Seq (kind, x, y))
   ;;
 
+  let lookbehind ids pn e = mk ids (Lookbehind (pn, e, -1))
+
   let is_eps expr =
     match expr.def with
     | Eps -> true
@@ -311,12 +350,230 @@ module Expr = struct
     | Seq (k, y, z) -> mk ids (Seq (k, rename ids y, rename ids z))
     | Rep (g, k, y) -> mk ids (Rep (g, k, rename ids y))
     | Lookahead (pn, e) -> mk ids (Lookahead (pn, rename ids e))
+    | Lookbehind (pn, e, id) -> mk ids (Lookbehind (pn, rename ids e, id))
+  ;;
+
+  let rec min_size cache t =
+    match Hashtbl.find_opt cache t.id with
+    | Some size -> size
+    | None ->
+      let size =
+        match t.def with
+        | Cst _ -> 1
+        | Alt ts ->
+          List.fold_left ~init:0 ts ~f:(fun acc t -> Int.min acc (min_size cache t))
+        | Seq (_, t1, t2) -> min_size cache t1 + min_size cache t2
+        | Rep _
+        | Eps
+        | Mark _
+        | Erase _
+        | Before _
+        | After _
+        | Lookahead _
+        | Lookbehind _
+        | Pmark _ -> 0
+      in
+      Hashtbl.add cache t.id size;
+      size
+  ;;
+
+  module Int_inf = struct
+    type t = int option (* None = +infinity *)
+
+    let max (t1 : t) t2 =
+      match t1, t2 with
+      | None, _ | _, None -> None
+      | Some i1, Some i2 -> Some (Int.max i1 i2)
+    ;;
+
+    let plus t1 t2 =
+      match t1, t2 with
+      | None, _ | _, None -> None
+      | Some i1, Some i2 -> Some (i1 + i2)
+    ;;
+
+    let minus_saturating t1 i2 =
+      match t1 with
+      | None | Some 0 -> t1
+      | Some i1 -> Some (Int.max 0 (i1 - i2 ()))
+    ;;
+  end
+
+  let rec max_size t =
+    match t.def with
+    | Cst _ -> Some 1
+    | Alt ts ->
+      List.fold_left ~init:(Some 0) ts ~f:(fun acc t -> Int_inf.max acc (max_size t))
+    | Seq (_, t1, t2) -> Int_inf.plus (max_size t1) (max_size t2)
+    | Rep _ -> None
+    | Eps | Mark _ | Erase _ | Before _ | After _ | Lookahead _ | Lookbehind _ | Pmark _
+      -> Some 0
+  ;;
+
+  module Expr_table = Hashtbl.Make (struct
+      type nonrec t = t
+
+      let rec hash { id = _; def } acc =
+        match def with
+        | Cst cset -> hash_combine 0 (hash_combine (Cset.hash cset) acc)
+        | Alt ts ->
+          hash_combine 1 (List.fold_left ts ~init:acc ~f:(fun acc t -> hash t acc))
+        | Seq (sem, t1, t2) -> hash_combine 2 (Sem.hash sem (hash t1 (hash t2 acc)))
+        | Eps -> hash_combine 3 acc
+        | Rep (rk, sem, t1) ->
+          hash_combine 4 (Rep_kind.hash rk (Sem.hash sem (hash t1 acc)))
+        | Mark mark -> hash_combine 5 (Mark.hash mark acc)
+        | Erase (mark1, mark2) -> hash_combine 6 (Mark.hash mark1 (Mark.hash mark2 acc))
+        | Before cat -> hash_combine 7 (hash_combine (Category.to_int cat) acc)
+        | After cat -> hash_combine 8 (hash_combine (Category.to_int cat) acc)
+        | Pmark pmark -> hash_combine 9 (hash_combine (pmark :> int) acc)
+        | Lookahead (pn, t) -> hash_combine 10 (Pos_or_neg.hash pn (hash t acc))
+        | Lookbehind (pn, _, id) ->
+          assert (id >= 0);
+          (* Here we don't recurse in the payload to avoid quadratic complexity, in a
+             pathological case where lookbehinds are nested to a depth of n. We only
+             rely on the id, which is known to be initialized because collect_lookbehinds
+             recurses before consulting the hashtbl. *)
+          hash_combine 11 (Pos_or_neg.hash pn (hash_combine id acc))
+      ;;
+
+      let hash t = hash t 123
+
+      let rec equal { id = _; def = def1 } { id = _; def = def2 } =
+        match def1, def2 with
+        | Cst cset1, Cst cset2 -> Cset.equal cset1 cset2
+        | Alt t1, Alt t2 -> List.equal ~eq:equal t1 t2
+        | Seq (sem1, l1, r1), Seq (sem2, l2, r2) ->
+          Sem.equal sem1 sem2 && equal l1 l2 && equal r1 r2
+        | Eps, Eps -> true
+        | Rep (rk1, sem1, t1), Rep (rk2, sem2, t2) ->
+          Rep_kind.equal rk1 rk2 && Sem.equal sem1 sem2 && equal t1 t2
+        | Mark m1, Mark m2 -> Mark.equal m1 m2
+        | Erase (s1, e1), Erase (s2, e2) -> Mark.equal s1 s2 && Mark.equal e1 e2
+        | Before cat1, Before cat2 -> Category.equal cat1 cat2
+        | After cat1, After cat2 -> Category.equal cat1 cat2
+        | Pmark p1, Pmark p2 -> Pmark.equal p1 p2
+        | Lookahead (pn1, t1), Lookahead (pn2, t2) ->
+          Pos_or_neg.equal pn1 pn2 && equal t1 t2
+        | Lookbehind (pn1, _, id1), Lookbehind (pn2, _, id2) ->
+          assert (id1 >= 0 && id2 >= 0) (* same remark as in hash *);
+          Pos_or_neg.equal pn1 pn2 && Int.equal id1 id2
+        | ( ( Cst _
+            | Alt _
+            | Seq _
+            | Eps
+            | Rep _
+            | Mark _
+            | Erase _
+            | Before _
+            | After _
+            | Pmark _
+            | Lookahead _
+            | Lookbehind _ )
+          , _ ) -> false
+      ;;
+    end)
+
+  let collect_lookbehinds t =
+    (* We could try to compute something more precise, so that we don't need to run
+       lookbehinds in parallel with the main regular expression constantly, but only
+       when we could need them. But the naive thing has a straighforward linear cost in
+       the size of the regex during compilation and when deriving every step, whereas the
+       more precise computation is not that simple, especially if we have to ensure we
+       don't have quadratic complexities. *)
+    let min_size_cache = Hashtbl.create 7 in
+    let id_by_lookbehind_expr = Expr_table.create 3 in
+    let lookbehinds = ref Int_map.empty in
+    let rec loop t =
+      match t.def with
+      | Cst _ -> Some 0, t
+      | Alt ts ->
+        let excess, ts =
+          List.fold_left_map ts ~init:(Some 0) ~f:(fun excess t1 ->
+            let excess1, t1 = loop t1 in
+            Int_inf.max excess excess1, t1)
+        in
+        excess, { t with def = Alt ts }
+      | Seq (a, t1, t2) ->
+        (* We wouldn't need the cache if we returned both min_size and max_lookbehind
+           from recursive calls, but the code would be less readable. Or if we knew
+           that seq are never nested left, then the quadratic complexity wouldn't be
+           possible in the first place. *)
+        let excess1, t1 = loop t1 in
+        let excess2, t2 = loop t2 in
+        ( Int_inf.max
+            excess1
+            (Int_inf.minus_saturating excess2 (fun () -> min_size min_size_cache t1))
+        , { t with def = Seq (a, t1, t2) } )
+      | Rep (a, b, t1) ->
+        let excess1, t1 = loop t1 in
+        excess1, { t with def = Rep (a, b, t1) }
+      | Lookahead (a, t1) ->
+        let excess1, t1 = loop t1 in
+        excess1, { t with def = Lookahead (a, t1) }
+      | Lookbehind (a, t1, _) ->
+        let excess1, t1 = loop t1 in
+        let id =
+          match Expr_table.find_opt id_by_lookbehind_expr t1 with
+          | Some id -> id
+          | None ->
+            let id = Expr_table.length id_by_lookbehind_expr in
+            Expr_table.add id_by_lookbehind_expr t1 id;
+            lookbehinds := Int_map.add id t1 !lookbehinds;
+            id
+        in
+        Int_inf.max (max_size t1) excess1, { t with def = Lookbehind (a, t1, id) }
+      | Eps | Mark _ | Erase _ | Before _ | After _ | Pmark _ -> Some 0, t
+    in
+    let how_far_to_look_back, t = loop t in
+    assert (Option.value how_far_to_look_back ~default:1 >= 0);
+    how_far_to_look_back, !lookbehinds, t
   ;;
 end
 
 type expr = Expr.t
 
 include Expr
+
+module Initial_expr = struct
+  type lookbehinds = expr Int_map.t
+
+  type t =
+    { how_far_to_look_back : int option
+    ; lookbehinds : lookbehinds
+    ; expr : expr
+    }
+
+  let to_dyn t =
+    if Int_map.is_empty t.lookbehinds
+    then to_dyn t.expr
+    else
+      Dyn.record
+        [ "expr", to_dyn t.expr
+        ; "how_far_to_look_back", Dyn.option Dyn.int t.how_far_to_look_back
+        ; "lookbehinds", Int_map.to_dyn to_dyn t.lookbehinds
+        ]
+  ;;
+
+  let create expr ids ~canycolor =
+    let how_far_to_look_back, lookbehinds, expr = collect_lookbehinds expr in
+    { how_far_to_look_back
+    ; lookbehinds =
+        Int_map.map
+          (fun e ->
+            (* Lookaheads are anchored on the left (to the current position), and
+               unanchored on the right. Lookbehinds are the other way around, so we
+               need an implied .* to unanchor it on the left, and special treatment
+               in [create_state] to right anchor it to the current position.
+
+               Compile.compile omits the .* sometimes. Not sure if we should do
+               something similar *)
+            seq ids `First (rep ids `Non_greedy `Shortest (cst ids canycolor)) e)
+          lookbehinds
+    ; expr
+    }
+  ;;
+end
 
 module Marks = struct
   type t =
@@ -436,21 +693,15 @@ module Desc : sig
   val status : t -> Status.t
   val split_at_exact_match : t -> t * t
 
-  val all_quasi_matches_rev
-    :  t
-    -> [ `Match of Marks.t | `Side_condition_match of Marks.t * Pos_or_neg.t * t ] list
+  type quasi_match =
+    [ `Match of Marks.t
+    | `Side_condition_match of Marks.t * Pos_or_neg.t * t
+    ]
 
+  val all_quasi_matches_rev : t -> quasi_match list
   val first_quasi_match : t -> [ `None | `Match of Marks.t | `Side_condition_match ]
   val remove_quasi_matches : t -> t
-
-  val split_at_quasi_matches_rev
-    :  t
-    -> [ `Match of Marks.t
-       | `Side_condition_match of Marks.t * Pos_or_neg.t * t
-       | `Chunk of t
-       ]
-         list
-
+  val split_at_quasi_matches_rev : t -> [ quasi_match | `Chunk of t ] list
   val add_match : t -> Marks.t -> t
   val add_eps : t -> Marks.t -> t
   val add_expr : t -> E.t -> t
@@ -555,12 +806,7 @@ end = struct
           then Some true
           else None
       in
-      let outcome =
-        match pn with
-        | Pos -> condition
-        | Neg -> Option.map not condition
-      in
-      (match outcome with
+      (match condition with
        | None ->
          let has_match =
            List.exists l1 ~f:(function
@@ -569,8 +815,7 @@ end = struct
              | _ -> false)
          in
          TSide_condition (has_match, l1, pn, l2) :: rem
-       | Some true -> l1 @ rem
-       | Some false -> rem)
+       | Some b -> if Pos_or_neg.apply pn b then l1 @ rem else rem)
   ;;
 
   let rec fold_right t ~init ~f =
@@ -652,6 +897,11 @@ end = struct
     | Neg, Pos -> outer_pn, tside_condition outer_cond inner_pn inner_cond []
     | Neg, Neg -> Neg, inner_cond @ outer_cond
   ;;
+
+  type quasi_match =
+    [ `Match of Marks.t
+    | `Side_condition_match of Marks.t * Pos_or_neg.t * t list
+    ]
 
   let rec all_quasi_matches_rev acc = function
     | [] -> acc
@@ -808,6 +1058,11 @@ module State = struct
   type t =
     { idx : Idx.t
     ; category : Category.t
+    ; lookbehinds : Desc.t Int_map.t
+    ; before_start : bool
+        (* Whether we are matching before Re.start. This happens when lookbehinds
+           need information before the start of matches. When the flag is set,
+           we feed characters into the lookbehinds, but not the main desc. *)
     ; desc : Desc.t
     ; mutable status : Status.t option
     ; hash : int
@@ -817,33 +1072,74 @@ module State = struct
 
   let pp fmt t = Desc.pp fmt t.desc
   let[@inline] idx t = t.idx
-  let to_dyn t = Desc.to_dyn t.desc
+
+  let to_dyn t =
+    if Int_map.is_empty t.lookbehinds && not t.before_start
+    then Desc.to_dyn t.desc
+    else
+      Dyn.record
+        [ "desc", Desc.to_dyn t.desc
+        ; "lookbehinds", Int_map.to_dyn Desc.to_dyn t.lookbehinds
+        ; "before_start", Dyn.bool t.before_start
+        ]
+  ;;
 
   let dummy =
     { idx = Idx.unknown
     ; category = Category.dummy
+    ; lookbehinds = Int_map.empty
+    ; before_start = false
     ; desc = Desc.empty
     ; status = None
     ; hash = -1
     }
   ;;
 
-  let hash idx cat desc =
-    Desc.hash desc (hash_combine idx (hash_combine (Category.to_int cat) 0))
-    land 0x3FFFFFFF
+  let hash idx cat lookbehinds ~before_start desc =
+    let hash = 0 in
+    let hash = hash_combine (Category.to_int cat) hash in
+    let hash = hash_combine (Bool.to_int before_start) hash in
+    let hash = hash_combine idx hash in
+    let hash = Desc.hash desc hash in
+    let hash =
+      Int_map.fold
+        (fun key data acc -> hash_combine key (Desc.hash data acc))
+        lookbehinds
+        hash
+    in
+    hash land 0x3FFFFFFF
   ;;
 
-  let mk idx cat desc =
-    { idx; category = cat; desc; status = None; hash = hash (idx :> int) cat desc }
+  let mk idx cat lookbehinds ~before_start desc =
+    { idx
+    ; category = cat
+    ; lookbehinds
+    ; before_start
+    ; desc
+    ; status = None
+    ; hash = hash (idx :> int) cat lookbehinds ~before_start desc
+    }
   ;;
 
-  let create cat e = mk Idx.initial cat (Desc.initial e)
+  let create cat (e : Initial_expr.t) =
+    mk
+      Idx.initial
+      cat
+      (Int_map.map Desc.initial e.lookbehinds)
+      (* Even if we start at beginning of string, and thus we can't look further back,
+         Compile.match_before_start will call advance (`At_match_start ..) to unset that
+         flag. *)
+      ~before_start:(Option.value e.how_far_to_look_back ~default:1 > 0)
+      (Desc.initial e.expr)
+  ;;
 
-  let equal { idx; category; desc; status = _; hash } t =
+  let equal { idx; category; lookbehinds; before_start; desc; status = _; hash } t =
     Int.equal hash t.hash
     && Idx.equal idx t.idx
     && Category.equal category t.category
+    && Bool.equal before_start t.before_start
     && Desc.equal desc t.desc
+    && Int_map.equal Desc.equal lookbehinds t.lookbehinds
   ;;
 
   (* To be called when the mutex has already been acquired *)
@@ -925,10 +1221,12 @@ type ctx =
       { c : Cset.c
       ; prev_cat : Category.t
       ; next_cat : Category.t
+      ; lookbehinds : (Desc.t * Desc.quasi_match list Lazy.t) Int_map.t ref
       }
   | Advance of
       { prev_cat : Category.t
       ; how : [ `Partial | `At_match_stop of Category.t ]
+      ; lookbehinds : (Desc.t * Desc.quasi_match list Lazy.t) Int_map.t ref
       }
 
 let rec delta_expr ctx marks (x : Expr.t) rem =
@@ -975,6 +1273,22 @@ let rec delta_expr ctx marks (x : Expr.t) rem =
       (Desc.add_match Desc.empty marks)
       pn
       (delta_expr ctx Marks.empty e Desc.empty)
+      rem
+  | Lookbehind (pn, _, id) ->
+    let lookbehinds =
+      match ctx with
+      | Delta { lookbehinds; _ } -> lookbehinds
+      | Advance { lookbehinds; _ } -> lookbehinds
+    in
+    let _, (lazy quasi_matches_rev) = Int_map.find id !lookbehinds in
+    Desc.tside_condition
+      (Desc.add_match Desc.empty marks)
+      pn
+      (List.fold_left quasi_matches_rev ~init:Desc.empty ~f:(fun acc ->
+           function
+           | `Match _ -> Desc.add_match acc marks
+           | `Side_condition_match (_, pn', l2) ->
+             Desc.tside_condition (Desc.add_match Desc.empty marks) pn' l2 acc))
       rem
 
 and delta_rep ctx marks x rep_kind kind y rem =
@@ -1057,19 +1371,48 @@ and delta_desc ctx (l : Desc.t) rem =
   Desc.fold_right l ~init:rem ~f:(fun y acc -> delta_e ctx y acc)
 ;;
 
-let create_state tbl_ref next_cat expr =
+let create_state (tbl_ref : Working_area.t) next_cat lookbehinds ~before_start expr =
+  let lookbehinds =
+    (* no need for Desc.set_idx in here, cause no groups *)
+    Int_map.map
+      (fun (desc, _) ->
+        Desc.remove_duplicates tbl_ref.seen (Desc.remove_quasi_matches desc) Expr.eps_expr)
+      lookbehinds
+  in
   let idx = Working_area.free_index tbl_ref expr in
   let expr = Desc.set_idx idx expr in
-  State.mk idx next_cat expr
+  State.mk idx next_cat lookbehinds ~before_start expr
+;;
+
+let map_into_ref ~ref map f =
+  Int_map.iter (fun key data -> ref := Int_map.add key (f data) !ref) map
+;;
+
+let delta_lookbehinds lookbehinds (st : State.t) ctx =
+  (* Mapping in this non-standard way allows later [f] calls to look up the result of
+     earlier [f] calls, which is necessary to support lookbehinds containing other
+     lookbehinds. *)
+  map_into_ref ~ref:lookbehinds st.lookbehinds (fun desc ->
+    let desc = delta_desc ctx desc Desc.empty in
+    desc, lazy (Desc.all_quasi_matches_rev desc))
 ;;
 
 let delta (tbl_ref : Working_area.t) next_cat char (st : State.t) =
+  let prev_cat = st.category in
+  let lookbehinds = ref Int_map.empty in
+  (let ctx = Delta { c = char; next_cat; prev_cat; lookbehinds } in
+   delta_lookbehinds lookbehinds st ctx);
   let expr =
-    let prev_cat = st.category in
-    let ctx = Delta { c = char; next_cat; prev_cat } in
-    Desc.remove_duplicates tbl_ref.seen (delta_desc ctx st.desc Desc.empty) Expr.eps_expr
+    if st.before_start
+    then st.desc
+    else (
+      let ctx = Delta { c = char; next_cat; prev_cat; lookbehinds } in
+      Desc.remove_duplicates
+        tbl_ref.seen
+        (delta_desc ctx st.desc Desc.empty)
+        Expr.eps_expr)
   in
-  create_state tbl_ref next_cat expr
+  create_state tbl_ref next_cat !lookbehinds ~before_start:st.before_start expr
 ;;
 
 (* When deriving [Re.str "abc"] wrt "a" then "b" then "c", we end up with [T (marks,
@@ -1079,23 +1422,51 @@ let delta (tbl_ref : Working_area.t) next_cat char (st : State.t) =
    advance through all epsilon transitions, so that we can detect a match or a mismatch
    without waiting for an extra character. *)
 let advance (tbl_ref : Working_area.t) how (st : State.t) =
-  let expr =
+  match how with
+  | `At_match_start ->
+    (* It's a bit awkward to do a normal advance here, because if we run inside of
+       exec_partial, we'll be followed by `Partial, and so the next_category would need
+       to be absent. Rather than passing the information about whether we're in
+       exec_partial, it's simpler to just not derive: we only need to update before_start
+       and the category. This is unlike `At_match_stop next_cat, which cannot be followed
+       by `Prefix, and does need to advance as next_cat is the only time stop_boundary
+       is set. *)
+    let expr = st.desc in
+    let idx = Working_area.free_index tbl_ref expr in
+    let expr = Desc.set_idx idx expr in
+    State.mk
+      idx
+      Category.(st.category ++ start_boundary)
+      st.lookbehinds
+      ~before_start:false
+      expr
+  | (`Partial | `At_match_stop _) as how ->
     let prev_cat = st.category in
-    let ctx = Advance { prev_cat; how } in
-    Desc.remove_duplicates tbl_ref.seen (delta_desc ctx st.desc Desc.empty) Expr.eps_expr
-  in
-  let expr =
-    match how with
-    | `Partial -> expr
-    | `At_match_stop _ ->
-      (* At the match boundary, we only keep matches and side matches. This way, we
-         know we can't create further matches, but we can keep reading more text to
-         satisfy/dissatisify lookaheads. *)
-      List.fold_left (Desc.all_quasi_matches_rev expr) ~init:Desc.empty ~f:(fun acc ->
-          function
-          | `Match marks -> Desc.add_match acc marks
-          | `Side_condition_match (marks, pn, l2) ->
-            Desc.tside_condition (Desc.add_match Desc.empty marks) pn l2 acc)
-  in
-  create_state tbl_ref st.category expr
+    let lookbehinds = ref Int_map.empty in
+    (let ctx = Advance { prev_cat; lookbehinds; how } in
+     delta_lookbehinds lookbehinds st ctx);
+    let expr =
+      if st.before_start
+      then st.desc
+      else (
+        let ctx = Advance { prev_cat; lookbehinds; how } in
+        Desc.remove_duplicates
+          tbl_ref.seen
+          (delta_desc ctx st.desc Desc.empty)
+          Expr.eps_expr)
+    in
+    let expr =
+      match how with
+      | `Partial | `At_match_start _ -> expr
+      | `At_match_stop _ ->
+        (* At the match boundary, we only keep matches and side matches. This way, we
+           know we can't create further matches, but we can keep reading more text to
+           satisfy/dissatisify lookaheads. *)
+        List.fold_left (Desc.all_quasi_matches_rev expr) ~init:Desc.empty ~f:(fun acc ->
+            function
+            | `Match marks -> Desc.add_match acc marks
+            | `Side_condition_match (marks, pn, l2) ->
+              Desc.tside_condition (Desc.add_match Desc.empty marks) pn l2 acc)
+    in
+    create_state tbl_ref st.category !lookbehinds ~before_start:st.before_start expr
 ;;

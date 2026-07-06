@@ -41,6 +41,7 @@ type t =
   | Alternative of Ast.t list
   | Repeat of Ast.t * int * int option
   | Lookahead of [ `Pos | `Neg ] * Ast.t
+  | Lookbehind of [ `Pos | `Neg ] * Ast.t
   | Beg_of_line
   | End_of_line
   | Beg_of_word of Ascii_or_latin1.t

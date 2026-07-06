@@ -121,6 +121,20 @@ val before : Ids.t -> Category.t -> expr
 val after : Ids.t -> Category.t -> expr
 val rename : Ids.t -> expr -> expr
 val lookahead : Ids.t -> Pos_or_neg.t -> expr -> expr
+val lookbehind : Ids.t -> Pos_or_neg.t -> expr -> expr
+
+module Initial_expr : sig
+  type lookbehinds
+
+  type t =
+    { how_far_to_look_back : int option
+    ; lookbehinds : lookbehinds
+    ; expr : expr
+    }
+
+  val create : expr -> Ids.t -> canycolor:Cset.t -> t
+  val to_dyn : t -> Dyn.t
+end
 
 (****)
 
@@ -144,7 +158,7 @@ module State : sig
 
   val pp : t Fmt.t
   val dummy : t
-  val create : Category.t -> expr -> t
+  val create : Category.t -> Initial_expr.t -> t
   val idx : t -> Idx.t
   val status_no_mutex : t -> Status.t
   val status : Mutex.t -> t -> Status.t
@@ -168,6 +182,6 @@ val delta : Working_area.t -> Category.t -> Cset.c -> State.t -> State.t
 
 val advance
   :  Working_area.t
-  -> [ `Partial | `At_match_stop of Category.t ]
+  -> [ `Partial | `At_match_stop of Category.t | `At_match_start ]
   -> State.t
   -> State.t

@@ -20,6 +20,12 @@ let pp_state state = print_dyn (State.to_dyn state)
 let pp_expr fmt expr = Automata.pp fmt expr
 let cat = Category.from_char '\000'
 
+let create_re f =
+  let ids = Ids.create () in
+  let re = f ids in
+  Automata.Initial_expr.create re ids ~canycolor:Cset.cany
+;;
+
 let str ids sem str =
   let rec loop (s : Char.t Seq.t) =
     match (s () : _ Seq.node) with
@@ -49,13 +55,13 @@ let loop ?(max = 100) wa d c =
 
 let%expect_test "string" =
   let re =
-    let n = 4 in
-    let s =
-      let c = 'a' in
-      String.make n c
-    in
-    let ids = Ids.create () in
-    str ids `First s
+    create_re (fun ids ->
+      let n = 4 in
+      let s =
+        let c = 'a' in
+        String.make n c
+      in
+      str ids `First s)
   in
   let wa = Working_area.create () in
   loop wa (State.create cat re) 'a';
@@ -79,20 +85,20 @@ let%expect_test "string" =
 
 let%expect_test "alternation" =
   let re =
-    let ids = Ids.create () in
-    let n = 4 in
-    let s =
-      let c = 'a' in
-      String.make n c
-    in
-    List.init ~len:n ~f:(fun i ->
-      let prefix = str ids `First s in
-      let suffix =
-        let c = Char.chr (Char.code 'b' + i) in
-        cst ids (Cset.csingle c)
+    create_re (fun ids ->
+      let n = 4 in
+      let s =
+        let c = 'a' in
+        String.make n c
       in
-      seq ids `First prefix suffix)
-    |> Automata.alt ids
+      List.init ~len:n ~f:(fun i ->
+        let prefix = str ids `First s in
+        let suffix =
+          let c = Char.chr (Char.code 'b' + i) in
+          cst ids (Cset.csingle c)
+        in
+        seq ids `First prefix suffix)
+      |> Automata.alt ids)
   in
   let wa = Working_area.create () in
   loop wa (State.create cat re) 'a';
@@ -117,21 +123,21 @@ let%expect_test "alternation" =
 let%expect_test "alternation shared prefix" =
   let n = 4 in
   let re =
-    let ids = Ids.create () in
-    let prefix =
-      let s =
-        let c = 'a' in
-        String.make n c
+    create_re (fun ids ->
+      let prefix =
+        let s =
+          let c = 'a' in
+          String.make n c
+        in
+        str ids `First s
       in
-      str ids `First s
-    in
-    let suffix =
-      List.init ~len:n ~f:(fun i ->
-        let c = Char.chr (Char.code 'b' + i) in
-        cst ids (Cset.csingle c))
-      |> Automata.alt ids
-    in
-    seq ids `First prefix suffix
+      let suffix =
+        List.init ~len:n ~f:(fun i ->
+          let c = Char.chr (Char.code 'b' + i) in
+          cst ids (Cset.csingle c))
+        |> Automata.alt ids
+      in
+      seq ids `First prefix suffix)
   in
   let wa = Working_area.create () in
   loop wa (State.create cat re) 'a';
@@ -148,10 +154,7 @@ let%expect_test "alternation shared prefix" =
 ;;
 
 let%expect_test "kleene star" =
-  let re =
-    let ids = Ids.create () in
-    rep ids `Greedy `First (cst ids (Cset.csingle 'z'))
-  in
+  let re = create_re (fun ids -> rep ids `Greedy `First (cst ids (Cset.csingle 'z'))) in
   let wa = Working_area.create () in
   loop ~max:4 wa (State.create cat re) 'z';
   [%expect
@@ -172,16 +175,16 @@ let%expect_test "kleene star" =
 let%expect_test "derivative recomputation" =
   let sem = `Longest in
   let re =
-    let ids = Ids.create () in
-    let lhs = rep ids `Non_greedy sem (cst ids Cset.cany) in
-    let rhs =
-      seq
-        ids
-        sem
-        (Automata.mark ids Automata.Mark.start)
-        (Automata.alt ids [ cst ids (Cset.csingle 'z'); cst ids (Cset.csingle 'b') ])
-    in
-    seq ids sem lhs rhs
+    create_re (fun ids ->
+      let lhs = rep ids `Non_greedy sem (cst ids Cset.cany) in
+      let rhs =
+        seq
+          ids
+          sem
+          (Automata.mark ids Automata.Mark.start)
+          (Automata.alt ids [ cst ids (Cset.csingle 'z'); cst ids (Cset.csingle 'b') ])
+      in
+      seq ids sem lhs rhs)
   in
   let wa = Working_area.create () in
   loop ~max:7 wa (State.create cat re) 'z';

@@ -26,6 +26,7 @@ module Ctx = struct
     { counter : int ref
     ; nested_stars : int
     ; in_lookahead : bool
+    ; in_lookbehind : bool
     }
 end
 
@@ -101,7 +102,7 @@ let re_gen =
                  let r = Re.rep (r { ctx with nested_stars = ctx.nested_stars + 1 }) in
                  if greedy then Re.greedy r else Re.non_greedy r)
              ; C.map [ self ] (fun r (ctx : Ctx.t) ->
-                 C.guard (not ctx.in_lookahead);
+                 C.guard ((not ctx.in_lookahead) && not ctx.in_lookbehind);
                  let name =
                    (* Names don't influence behavior, so we force specific names instead
                       of wasting fuzzing time on different names. *)
@@ -127,20 +128,28 @@ let re_gen =
                  ; C.const (fun (_ctx : Ctx.t) -> Re.start)
                  ; C.const (fun (_ctx : Ctx.t) -> Re.stop)
                  ]
-             ; C.map [ C.bool; self ] (fun b r (ctx : Ctx.t) ->
-                 let pn = if b then `Pos else `Neg in
-                 Re.lookahead pn (r { ctx with in_lookahead = true }))
+             ; C.map [ C.bool; C.bool; self ] (fun b1 b2 r (ctx : Ctx.t) ->
+                 let pn = if b2 then `Pos else `Neg in
+                 if b1
+                 then Re.lookahead pn (r { ctx with in_lookahead = true })
+                 else Re.lookbehind pn (r { ctx with in_lookbehind = true }))
              ])
        ]
        (fun f ->
          let group_counter = ref 0 in
          ( group_counter
-         , f { counter = group_counter; nested_stars = 0; in_lookahead = false } )))
+         , f
+             { counter = group_counter
+             ; nested_stars = 0
+             ; in_lookahead = false
+             ; in_lookbehind = false
+             } )))
 ;;
 
 module Compare_to_reference = struct
   type ctx =
     { str : string
+    ; ltr : bool
     ; start : int
     ; stop : int
     ; exceed_start_stop : bool
@@ -180,10 +189,11 @@ module Compare_to_reference = struct
   let peek_behind ctx pos = peek_ahead ctx (pos - 1)
 
   let consume_byte ctx pos =
-    if (pos < if ctx.exceed_start_stop then 0 else ctx.start)
-       || pos >= if ctx.exceed_start_stop then String.length ctx.str else ctx.stop
+    let pos' = if ctx.ltr then pos else pos - 1 in
+    if (pos' < if ctx.exceed_start_stop then 0 else ctx.start)
+       || pos' >= if ctx.exceed_start_stop then String.length ctx.str else ctx.stop
     then None
-    else Some (ctx.str.[pos], pos + 1)
+    else Some (ctx.str.[pos'], if ctx.ltr then pos + 1 else pos - 1)
   ;;
 
   let wordc = function
@@ -264,7 +274,9 @@ module Compare_to_reference = struct
                   Cset.Range.first range <= c && c <= Cset.Range.last range) ->
            k { matches = state.matches; pos = pos' }
          | _ -> ())
-      | Sequence rs -> fold_left (fun state r k -> reference r ctx state k) state rs k
+      | Sequence rs ->
+        let rs = if ctx.ltr then rs else List.rev rs in
+        fold_left (fun state r k -> reference r ctx state k) state rs k
       | Alternative rs -> List.iter rs ~f:(fun r -> reference r ctx state k)
       | Repeat (r1, min, max) ->
         assert (min = 0);
@@ -285,7 +297,17 @@ module Compare_to_reference = struct
             if state.pos = state2.pos then k state2 else reference r ctx state2 k)
       | Lookahead (pn, r) ->
         (match
-           pn, has_one_success (reference r { ctx with exceed_start_stop = true } state)
+           ( pn
+           , has_one_success
+               (reference r { ctx with ltr = true; exceed_start_stop = true } state) )
+         with
+         | `Pos, false | `Neg, true -> ()
+         | `Pos, true | `Neg, false -> k state)
+      | Lookbehind (pn, r) ->
+        (match
+           ( pn
+           , has_one_success
+               (reference r { ctx with ltr = false; exceed_start_stop = true } state) )
          with
          | `Pos, false | `Neg, true -> ()
          | `Pos, true | `Neg, false -> k state)
@@ -359,7 +381,7 @@ module Compare_to_reference = struct
     find_success
       (reference
          (Re.seq [ Re.non_greedy (Re.rep Re.any); Re.group ~name:(group_name 0) re ])
-         { str; start; stop; rep = `Greedy; exceed_start_stop = false }
+         { str; ltr = true; start; stop; rep = `Greedy; exceed_start_stop = false }
          { pos; matches = String_map.empty })
     |> Option.map (fun state -> state.matches)
   ;;
