@@ -1,3 +1,10 @@
+let debug : (Dyn.t -> unit) option ref option =
+  (* The outer option is so that, when not developing, we can leave it in the code and
+     make it trivially obvious to the compiler that this is dead code, and therefore any
+     match on it can be discarded as well. *)
+  if false then None else Some (ref None)
+;;
+
 module List = struct
   let[@warning "-32"] rec equal ~eq l1 l2 =
     match l1, l2 with

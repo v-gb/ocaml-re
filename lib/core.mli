@@ -819,6 +819,8 @@ val pp : Format.formatter -> t -> unit
 val pp_api : Format.formatter -> t -> unit
 val pp_re : Format.formatter -> re -> unit
 val nstates : re -> int
+val to_dyn : ?color_map:bool -> re -> Dyn.t
+val with_debug : (Dyn.t -> unit) -> (unit -> 'a) -> 'a
 
 (**/**)
 

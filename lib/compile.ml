@@ -266,6 +266,17 @@ let rec loop re ~colors ~positions s ~pos ~last st0 st =
   then (
     let st' = next colors st s pos in
     let idx = (State.get_info st').idx in
+    (match debug with
+     | Some { contents = Some f } when Idx.is_idx idx || Idx.is_break idx ->
+       f
+         (Dyn.pair
+            (Dyn.string
+               (Printf.sprintf
+                  "reading %C %d"
+                  s.[pos]
+                  (Cset.to_int (Color_map.Table.get colors s.[pos]))))
+            (Automata.State.to_dyn (State.get_info st').desc))
+     | _ -> ());
     if Idx.is_idx idx
     then
       if Idx.idx idx < Positions.length positions
@@ -292,6 +303,17 @@ let rec loop_no_mark re ~colors s ~pos ~last st0 st =
   then (
     let st' = next colors st s pos in
     let idx = (State.get_info st').idx in
+    (match debug with
+     | Some { contents = Some f } when Idx.is_idx idx || Idx.is_break idx ->
+       f
+         (Dyn.pair
+            (Dyn.string
+               ("reading "
+                ^ String.sub s pos 1
+                ^ " "
+                ^ Int.to_string (Cset.to_int (Color_map.Table.get colors s.[pos]))))
+            (Automata.State.to_dyn (State.get_info st').desc))
+     | _ -> ());
     if Idx.is_idx idx
     then loop_no_mark re ~colors s ~pos:(pos + 1) ~last st' st'
     else if Idx.is_break idx
@@ -406,9 +428,17 @@ let rec scan_str re positions (s : string) initial_state ~last ~pos ~groups =
     if Idx.is_break (State.get_info st).idx
     then st
     else handle_last_newline re positions ~pos:last st ~groups)
-  else if groups
-  then loop re ~colors:re.colors ~positions s ~pos ~last initial_state initial_state
-  else loop_no_mark re ~colors:re.colors s ~pos ~last initial_state initial_state
+  else (
+    (match debug with
+     | Some { contents = Some f } ->
+       f
+         (Dyn.pair
+            (Dyn.string "initial")
+            (Automata.State.to_dyn (State.get_info initial_state).desc))
+     | _ -> ());
+    if groups
+    then loop re ~colors:re.colors ~positions s ~pos ~last initial_state initial_state
+    else loop_no_mark re ~colors:re.colors s ~pos ~last initial_state initial_state)
 ;;
 
 (* This function adds a final boundary check on the input.
@@ -447,6 +477,13 @@ let match_until_start re positions s ~start ~groups =
   let st = scan_str re positions s st ~pos ~last:start ~groups in
   let info = State.get_info st in
   assert (not (Idx.is_break info.idx));
+  (match debug with
+   | Some { contents = Some f } ->
+     f
+       (Dyn.pair
+          (Dyn.string "match_until_start before advance")
+          (Automata.State.to_dyn (State.get_info st).desc))
+   | _ -> ());
   (* advance won't execute anything, so there should be no need to update positions *)
   advance re info `At_match_start
 ;;
@@ -488,6 +525,10 @@ let final_advance re positions ~last state_info ~groups =
        (if Idx.is_break info.idx then Idx.break_idx info.idx else Idx.idx info.idx)
        last
    | _ -> ());
+  (match debug with
+   | Some { contents = Some f } ->
+     f (Dyn.Tuple [ Dyn.string "final_advance'd"; Automata.State.to_dyn info.desc ])
+   | _ -> ());
   res
 ;;
 
@@ -501,9 +542,18 @@ let make_match_str re positions ~len ~groups ~partial s ~pos =
   then (
     match Automata.State.status re.mutex state_info.desc with
     | (Match _ | Failed) as status -> status
-    | Running -> final_advance re positions ~last state_info ~groups)
+    | Running ->
+      (match debug with
+       | Some { contents = Some f } ->
+         f (Dyn.pair (Dyn.string "final_advance") (Automata.State.to_dyn state_info.desc))
+       | _ -> ());
+      final_advance re positions ~last state_info ~groups)
   else (
     ();
+    (match debug with
+     | Some { contents = Some f } ->
+       f (Dyn.pair (Dyn.string "final") (Automata.State.to_dyn state_info.desc))
+     | _ -> ());
     if Idx.is_break state_info.idx
     then Automata.State.status re.mutex state_info.desc
     else match_after_stop re positions s ~slen ~last state_info ~groups)

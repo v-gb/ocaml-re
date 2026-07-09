@@ -165,6 +165,7 @@ include struct
   let compile = compile
   let pp_re = pp_re
   let nstates = nstates
+  let to_dyn = to_dyn
   let print_re = pp_re
   let copy_re = copy_re
   let group_names = group_names
@@ -207,3 +208,18 @@ end
 
 module Seq = Search
 module Stream = Compile.Stream
+
+let with_debug f1 f2 =
+  match debug with
+  | None -> failwith "can't use with_debug without toggling Import.debug first"
+  | Some r ->
+    let prev = !r in
+    r := Some f1;
+    (match f2 () with
+     | a ->
+       r := prev;
+       a
+     | exception e ->
+       r := prev;
+       raise e)
+;;
