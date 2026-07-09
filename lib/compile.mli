@@ -60,3 +60,4 @@ val pp_re : re Fmt.t
 val copy_re : re -> re
 val to_dyn : ?color_map:bool -> re -> Dyn.t
 val nstates : re -> int
+val stats : re -> (string * string) list

@@ -20,6 +20,19 @@ let re2 () =
 
 let str = "01" ^ String.make size '1'
 
+let stats () =
+  Format.printf "%a@." Re.pp_re (re ());
+  List.concat_map
+    [ "re1", re; "re2", re2 ]
+    ~f:(fun (name, re) ->
+      List.map [ 10; 20; 40; 80; 100; 1000; size ] ~f:(fun len ->
+        let re = re () in
+        let len = Int.min (String.length str) len in
+        ignore (Re.execp ~pos:0 ~len re str);
+        ("name", name) :: ("len", Int.to_string len) :: Re__Compile.stats re))
+  |> List.map ~f:(sexp_of_list (fun (a, b) -> sexp_of_list sexp_of_string [ a; b ]))
+;;
+
 let benchmarks =
   [ "memory 1", re; "memory 2", re2 ]
   |> ListLabels.map ~f:(fun (name, re) ->

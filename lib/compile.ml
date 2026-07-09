@@ -1024,3 +1024,42 @@ let compile r =
 ;;
 
 let nstates t = Automata.State.Table.length t.states
+
+let stats re =
+  let prettify_words words =
+    let bytes = words * Sys.word_size / 8 in
+    let name, count =
+      List.fold_left
+        ~init:("B", bytes)
+        [ "kiB"; "MiB" ]
+        ~f:(fun (name, count) next_name ->
+          if count < 5 * 1024 then name, count else next_name, count / 1024)
+    in
+    Int.to_string count ^ name
+  in
+  let nstates = Automata.State.Table.length re.states in
+  let nderives =
+    Automata.State.Table.fold
+      (fun _ state acc ->
+        if Idx.is_break (State.get_info state).idx
+        then acc
+        else (
+          let acc = ref acc in
+          for c = 0 to re.ncolor - 1 do
+            if not (State.is_unknown_transition state ~color:(Cset.of_int c))
+            then acc := !acc + 1
+          done;
+          !acc))
+      re.states
+      0
+  in
+  let memuse = Obj.reachable_words (Obj.repr re) in
+  let memuse_initial = Obj.reachable_words (Obj.repr (copy_re re)) in
+  [ "ncolor", Int.to_string re.ncolor
+  ; "nstates", Int.to_string nstates
+  ; "nderives", Int.to_string nderives
+  ; "mem", prettify_words memuse_initial ^ "+" ^ prettify_words (memuse - memuse_initial)
+  ; ( "mem/state"
+    , if nstates = 0 then "-" else prettify_words ((memuse - memuse_initial) / nstates) )
+  ]
+;;

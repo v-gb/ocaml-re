@@ -201,6 +201,14 @@ let benchmarks =
   @ prefixes
 ;;
 
+let memory =
+  Command.basic
+    ~summary:""
+    (Command.Param.return (fun () ->
+       List.iter (Memory.stats ()) ~f:(fun sexp ->
+         print_endline (Base.Sexp.to_string_mach sexp))))
+;;
+
 let () =
   let benchmarks =
     match Sys.getenv "RE_BENCH_FILTER" with
@@ -222,5 +230,8 @@ let () =
          exit 1)
   in
   Memtrace.trace_if_requested ();
-  Command_unix.run (Bench.make_command benchmarks)
+  Command_unix.run
+    (Command.group
+       ~summary:""
+       [ "time", Bench.make_command benchmarks; "memory", memory ])
 ;;
