@@ -805,6 +805,7 @@ end
 val pp : Format.formatter -> t -> unit
 val pp_api : Format.formatter -> t -> unit
 val pp_re : Format.formatter -> re -> unit
+val nstates : re -> int
 
 (**/**)
 

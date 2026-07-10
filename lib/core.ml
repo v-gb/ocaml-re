@@ -164,6 +164,7 @@ include struct
 
   let compile = compile
   let pp_re = pp_re
+  let nstates = nstates
   let print_re = pp_re
   let copy_re = copy_re
   let group_names = group_names

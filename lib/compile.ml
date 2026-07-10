@@ -942,3 +942,5 @@ let compile r =
   let open Ast.Export in
   compile_1 (if Ast.anchored r then group r else seq [ shortest (rep any); group r ])
 ;;
+
+let nstates t = Automata.State.Table.length t.states

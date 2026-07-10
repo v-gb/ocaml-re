@@ -464,9 +464,36 @@ module Exec_partial = struct
   ;;
 end
 
+module Finite_number_of_states = struct
+  let add_test () =
+    C.add_test
+      ~name:"finite_number_of_states"
+      [ re_gen; string_gen_dyn 3; string_gen_dyn ~min:1 3 ]
+      (fun (_, t) prefix rest ->
+        let states re n =
+          ignore
+            (Re.execp
+               re
+               (String.concat "" (prefix :: List.init ~len:n ~f:(fun _ -> rest))));
+          Re.nstates re
+        in
+        (* We use two separate re, otherwise you get false triggers due the first
+           execution going state 1 -> state 2 -> state 1 -> state 2 -> ... -> state 1 ->
+           final state. And the second execution does the same, but ending with
+           state 2 -> final state, which creates a different final state, thus making it
+           appear like the number of states is growing. By separating we ensure n2 really
+           has more states than n1, rather than different states. *)
+        let n1 = states (Re.compile t) 999 in
+        let n2 = states (Re.compile t) 1000 in
+        if n2 > n1 then C.failf "number of states: %n -> %n@." n1 n2)
+  ;;
+end
+
 let () =
   Compare_to_reference.add_test ();
-  Exec_partial.add_test ()
+  Exec_partial.add_test ();
+  Finite_number_of_states.add_test ();
+  ()
 ;;
 
 (* Currently, this fuzzing is run manually, it's not plugged into dune or CI or anything.
