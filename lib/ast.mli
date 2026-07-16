@@ -37,6 +37,7 @@ type no_case = (Cset.t, [ `Uncased ]) gen
 
 val to_dyn : t -> Dyn.t
 val pp : t Fmt.t
+val pp_api : t Fmt.t
 val merge_sequences : (Cset.t, [ `Uncased ]) gen list -> (Cset.t, [ `Uncased ]) gen list
 val handle_case : bool -> t -> (Cset.t, [ `Uncased ]) gen
 val anchored : t -> bool
@@ -84,6 +85,7 @@ module Export : sig
   val shortest : t -> t
   val seq : t list -> t
   val pp : t Fmt.t
+  val pp_api : t Fmt.t
   val witness : t -> string
 end
 

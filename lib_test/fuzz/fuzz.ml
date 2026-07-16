@@ -78,7 +78,7 @@ let re_gen =
      test the execution engine, so testing intersection of character set, or no group,
      is not very important. *)
   C.with_printer
-    (fun fmt (_, re) -> Re.pp fmt re)
+    (fun fmt (_, re) -> Re.pp_api fmt re)
     (C.map
        [ C.fix (fun self ->
            C.choose
@@ -233,7 +233,7 @@ module Compare_to_reference = struct
         let matches = ref [] in
         f (fun state -> matches := state :: !matches);
         let matches = List.rev !matches in
-        Format.printf "@[<2>%a@ %a:@ %a@]@\n" Re.pp r pp_state state pp_states matches;
+        Format.printf "@[<2>%a@ %a:@ %a@]@\n" Re.pp_api r pp_state state pp_states matches;
         List.iter matches ~f:k)
   ;;
 

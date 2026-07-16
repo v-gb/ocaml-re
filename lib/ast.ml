@@ -107,6 +107,135 @@ let rec dyn_of_gen f =
     variant "Sem_greedy" [ Automata.Rep_kind.to_dyn rep; dyn_of_gen f t ]
 ;;
 
+module Minicaml = struct
+  type t =
+    | Apply of string * (string option * t) list
+    | Ident of string
+    | List of t list
+    | Int of int
+    | String of string
+    | Char of char
+
+  let ident s = Ident s
+  let call s args = Apply (s, args)
+  let call' s args = call s (List.map args ~f:(fun t -> None, t))
+
+  let rec pp ~under_apply fmt = function
+    | Apply (f, l) ->
+      Format.fprintf fmt "@[<2>%s%s" (if under_apply then "(" else "") f;
+      List.iter l ~f:(function
+        | None, t -> Format.fprintf fmt "@ %a" (pp ~under_apply:true) t
+        | Some label, t -> Format.fprintf fmt "@ ~%s:%a" label (pp ~under_apply:true) t);
+      Format.fprintf fmt "%s@]" (if under_apply then ")" else "")
+    | Ident s -> Format.fprintf fmt "%s" s
+    | List ts ->
+      Format.fprintf
+        fmt
+        "@[<2>[@,%a@,]@]"
+        (Format.pp_print_list (pp ~under_apply:false) ~pp_sep:(fun fmt () ->
+           Format.fprintf fmt ";@ "))
+        ts
+    | Int n -> Format.fprintf fmt "%d" n
+    | String s -> Format.fprintf fmt "%S" s
+    | Char c -> Format.fprintf fmt "%C" c
+  ;;
+end
+
+let cset_to_api' cset =
+  let open Minicaml in
+  if Cset.equal cset Cset.cany
+  then ident "any"
+  else if Cset.equal cset Cset.wordc
+  then ident "wordc"
+  else (
+    let chars, ranges =
+      Cset.fold_right cset ~init:("", []) ~f:(fun c1 c2 (acc1, acc2) ->
+        let c1 = Cset.to_int c1 in
+        let c2 = Cset.to_int c2 in
+        if c1 = c2
+        then String.make 1 (Char.chr c1) ^ acc1, acc2
+        else acc1, call' "rg" [ Char (Char.chr c1); Char (Char.chr c2) ] :: acc2)
+    in
+    let l =
+      match String.length chars with
+      | 0 -> ranges
+      | 1 -> call' "char" [ Char chars.[0] ] :: ranges
+      | _ -> call' "set" [ String chars ] :: ranges
+    in
+    match l with
+    | [ x ] -> x
+    | _ -> call' "alt" [ List l ])
+;;
+
+let ast_to_api (type a b) a_to_api (ast : (a, b) ast) =
+  let open Minicaml in
+  match ast with
+  | Alternative alt -> call' "alt" [ List (List.map alt ~f:a_to_api) ]
+  | Case c -> call' "case" [ a_to_api c ]
+  | No_case c -> call' "no_case" [ a_to_api c ]
+;;
+
+let rec to_api cset_to_api t =
+  let open Minicaml in
+  let to_api = to_api cset_to_api in
+  match t with
+  | Set cset -> cset_to_api cset
+  | Sequence ts -> call' "seq" [ List (List.map ~f:to_api ts) ]
+  | Repeat (t1, start, stop) ->
+    (match start, stop with
+     | 0, None -> call' "rep" [ to_api t1 ]
+     | 0, Some 1 -> call' "opt" [ to_api t1 ]
+     | 1, None -> call' "rep1" [ to_api t1 ]
+     | _ ->
+       call'
+         "repn"
+         [ to_api t1
+         ; Int start
+         ; (match stop with
+            | None -> ident "None"
+            | Some n -> call' "Some" [ Int n ])
+         ])
+  | Beg_of_line -> ident "bol"
+  | End_of_line -> ident "eol"
+  | Beg_of_word -> ident "bow"
+  | End_of_word -> ident "eow"
+  | Not_bound -> ident "not_boundary"
+  | Beg_of_str -> ident "bos"
+  | End_of_str -> ident "eos"
+  | Last_end_of_line -> ident "lnl"
+  | Start -> ident "start"
+  | Stop -> ident "stop"
+  | Group (None, t1) -> call' "group" [ to_api t1 ]
+  | Group (Some n, t1) -> call "group" [ Some "name", String n; None, to_api t1 ]
+  | Nest t1 -> call' "nest" [ to_api t1 ]
+  | Pmark (_, t1) -> call' "fst" [ call' "mark" [ to_api t1 ] ]
+  | Ast a -> ast_to_api to_api a
+  | Sem (sem, t1) ->
+    call'
+      (match sem with
+       | `Shortest -> "shortest"
+       | `Longest -> "longest"
+       | `First -> "first")
+      [ to_api t1 ]
+  | Sem_greedy (k, t1) ->
+    call'
+      (match k with
+       | `Greedy -> "greedy"
+       | `Non_greedy -> "non_greedy")
+      [ to_api t1 ]
+  | No_group t1 -> call' "no_group" [ to_api t1 ]
+;;
+
+let rec cset_to_api cset =
+  let open Minicaml in
+  match cset with
+  | Cast s -> ast_to_api cset_to_api s
+  | Cset s -> cset_to_api' s
+  | Intersection c -> call' "inter" [ List (List.map c ~f:cset_to_api) ]
+  | Complement c -> call' "compl" [ List (List.map c ~f:cset_to_api) ]
+  | Difference (a, b) -> call' "diff" [ cset_to_api a; cset_to_api b ]
+;;
+
 let rec pp_gen pp_cset fmt t =
   let open Format in
   let open Fmt in
@@ -182,6 +311,7 @@ type no_case = (Cset.t, [ `Uncased ]) gen
 
 let to_dyn = dyn_of_gen dyn_of_cset
 let pp = pp_gen pp_cset
+let pp_api fmt t = Minicaml.pp ~under_apply:false fmt (to_api cset_to_api t)
 let cset cset = Set (Cset cset)
 
 let rec handle_case_cset ign_case = function
@@ -229,6 +359,7 @@ module Export = struct
   type nonrec t = t
 
   let pp = pp
+  let pp_api = pp_api
 
   let seq = function
     | [ r ] -> r

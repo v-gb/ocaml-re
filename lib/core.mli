@@ -705,6 +705,7 @@ val no_case : t -> t
 (** {2 Internal debugging} *)
 
 val pp : Format.formatter -> t -> unit
+val pp_api : Format.formatter -> t -> unit
 val pp_re : Format.formatter -> re -> unit
 
 (**/**)
