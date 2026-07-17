@@ -34,3 +34,17 @@ Pure OCaml regular expressions with:
 * Compatibility layer for OCaml's built-in Str module (module Re.Str)
 "))
 
+(package
+ (name re_utf8)
+ (synopsis "Re_utf8 extends Re with utf8-aware regular expressions")
+ (depends
+  (ocaml (>= 4.14.0))
+  (re (= :version))
+  (ppx_expect :with-test)
+  (js_of_ocaml :with-test)
+  (uucp :build))
+ (description "
+Re_utf8 extends Re with utf8-aware regular expressions:
+* character classes like \"letters\" or \"greek script\"
+* utf8 word boundaries
+"))

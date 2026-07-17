@@ -1,0 +1,11 @@
+(library
+ (name re_utf8_tests)
+ (libraries
+   re
+   re_utf8
+   base
+   ppx_expect.config_types
+   ppx_expect_common
+ )
+ (inline_tests (modes native js))
+ (preprocess (pps ppx_expect)))

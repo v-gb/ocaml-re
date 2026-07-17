@@ -4,6 +4,25 @@ This is a branch of ocaml-re that, compared to the main branch:
   and provides `Re.Latin1.{word,bow,no_case}` for explicit use
 - provides an `Re.Ascii` submodule which mirrors all latin1 construction
   with their ascii counterpart
+- unicode character classes, meaning the ability to match on "all letters" or "greek
+  script" etc. Since ocaml-re works by matching bytes, this works by building a big
+  regex that simply match the bytes of the utf8 encoding of the uchars (same technique
+  as the re2 in r++ and regex in rust).
+
+Performance-wise, large regexes generally compile slower, execute slower initially and
+take more memory. Unicode character classes are much bigger than their ascii
+counterpart, so it's easier to build such large regexes. E.g.
+`Re_utf8.Gc.L.uchar_set`, the set of all unicode letters, is about 150k symbols, and
+takes about 3ms to compile, as opposed to microseconds for its ascii counterpart. Of
+course the cost multiplies if you use such big classes over and over.
+
+Should memory usage be a problem, I suspect we could optimize:
+- the size of the byte tries, which are represented as general alternations
+  sequences and csets, but would perhaps benefit from a dedicated representation.
+- the transition tables might be large in some cases, and if you have 100 colors,
+  instead of each state having a table of size 100, you could have a bitset of size
+  100 + a table of size popcount(bitset), where a bitset represents the equivalence
+  classes for this specific state.
 
 The original ocaml-re readme follows.
 
