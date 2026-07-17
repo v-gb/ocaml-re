@@ -21,15 +21,29 @@ let re2 () =
 let str = "01" ^ String.make size '1'
 
 let stats () =
-  Format.printf "%a@." Re.pp_re (re ());
-  List.concat_map
-    [ "re1", re; "re2", re2 ]
-    ~f:(fun (name, re) ->
-      List.map [ 10; 20; 40; 80; 100; 1000; size ] ~f:(fun len ->
-        let re = re () in
-        let len = Int.min (String.length str) len in
-        ignore (Re.execp ~pos:0 ~len re str);
-        ("name", name) :: ("len", Int.to_string len) :: Re__Compile.stats re))
+  let mem_utf8 =
+    let s = In_channel.read_all "benchmarks/wikipedia-photographie" in
+    let re =
+      Re_utf8.(
+        compile
+          (* rep1 is duplicating the expression, which is kind of expensive with
+             unicode. *)
+          (rep1 (cset Re_utf8.Gc.L.set)))
+    in
+    ignore (Re.matches re s : string list);
+    [ ("name", "utf8-letter") :: Re__Compile.stats re ]
+  in
+  let mem_repeat =
+    List.concat_map
+      [ "re1", re; "re2", re2 ]
+      ~f:(fun (name, re) ->
+        List.map [ 10; 20; 40; 80; 100; 1000; size ] ~f:(fun len ->
+          let re = re () in
+          let len = Int.min (String.length str) len in
+          ignore (Re.execp ~pos:0 ~len re str);
+          ("name", name) :: ("len", Int.to_string len) :: Re__Compile.stats re))
+  in
+  List.concat [ mem_repeat; mem_utf8 ]
   |> List.map ~f:(sexp_of_list (fun (a, b) -> sexp_of_list sexp_of_string [ a; b ]))
 ;;
 

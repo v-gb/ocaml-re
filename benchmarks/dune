@@ -9,6 +9,7 @@
  (flags (:standard -alert -latin1))
  (libraries
   re
+  re_utf8
   core
   base
   stdio

@@ -151,6 +151,42 @@ let prefixes =
     done)
 ;;
 
+let utf8_benches =
+  let test ~name re f =
+    [ Bench.Test.create ~name:(sprintf "%s (build)" name) (fun () -> re ())
+    ; Bench.Test.create_with_initialization ~name:(sprintf "%s (comp)" name) (fun `init ->
+        re ())
+    ; Bench.Test.create_with_initialization ~name:(sprintf "%s (exec)" name) (fun `init ->
+        let re =
+          let re = (re ()) () in
+          fun () -> Re.copy_re re
+        in
+        let f = f `init in
+        fun () -> f (re ()))
+    ]
+  in
+  let tests = ref [] in
+  let run text name re =
+    let re () =
+      let re = re () in
+      fun () -> Re.compile re
+    in
+    tests
+    := test ~name:("utf8-" ^ name) re (fun `init ->
+         let (lazy text) = text in
+         fun re -> Http.read_all 0 re text)
+       :: !tests
+  in
+  let wiki = lazy (In_channel.read_all "benchmarks/wikipedia-photographie") in
+  run wiki "word-latin1" (fun () -> Re.rep1 Re.wordc);
+  run wiki "word-utf8" (fun () -> Re_utf8.(to_re (rep1 (cset Re_utf8.Gc.L.set))));
+  run wiki "greek-utf8" (fun () -> Re_utf8.(to_re (rep1 (cset Re_utf8.Script.Grek.set))));
+  run wiki "word-latin1-no-matches" (fun () -> Re.(seq [ rep1 wordc; str "QQQ" ]));
+  run wiki "word-utf8-no-matches" (fun () ->
+    Re_utf8.(to_re (seq [ rep1 (cset Re_utf8.Gc.L.set); str "QQQ" ])));
+  List.concat (List.rev !tests)
+;;
+
 let benchmarks =
   let benches =
     List.map benchmarks ~f:(fun (name, re, cases) ->
@@ -199,6 +235,7 @@ let benchmarks =
   @ repeated_sequence
   @ split
   @ prefixes
+  @ utf8_benches
 ;;
 
 let memory =
