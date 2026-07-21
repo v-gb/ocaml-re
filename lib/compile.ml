@@ -202,7 +202,7 @@ let category re ~color =
   if Cset.equal_c color Cset.null_char
   then Category.inexistant (* Special category for the last newline *)
   else if Cset.equal_c color re.lnl
-  then Category.(lastnewline ++ newline ++ not_letter)
+  then Category.(lastnewline ++ newline ++ not_ascii_letter ++ not_latin1_letter)
   else Category.from_char (Color_map.Repr.repr re.color_repr color)
 ;;
 
@@ -775,25 +775,29 @@ let rec translate
     iter i (fun rem -> A.seq ids kind' (A.rename ids cr) rem) rem, kind
   | Beg_of_line -> A.after ids Category.(inexistant ++ newline), kind
   | End_of_line -> A.before ids Category.(inexistant ++ newline), kind
-  | Beg_of_word ->
+  | Beg_of_word al ->
     ( A.seq
         ids
         `First
-        (A.after ids Category.(inexistant ++ not_letter))
-        (A.before ids Category.letter)
+        (A.after ids Category.(inexistant ++ not_letter al))
+        (A.before ids Category.(letter al))
     , kind )
-  | End_of_word ->
+  | End_of_word al ->
     ( A.seq
         ids
         `First
-        (A.after ids Category.letter)
-        (A.before ids Category.(inexistant ++ not_letter))
+        (A.after ids Category.(letter al))
+        (A.before ids Category.(inexistant ++ not_letter al))
     , kind )
-  | Not_bound ->
+  | Not_bound al ->
     ( A.alt
         ids
-        [ A.seq ids `First (A.after ids Category.letter) (A.before ids Category.letter)
-        ; (let cat = Category.(inexistant ++ not_letter) in
+        [ A.seq
+            ids
+            `First
+            (A.after ids (Category.letter al))
+            (A.before ids (Category.letter al))
+        ; (let cat = Category.(inexistant ++ not_letter al) in
            A.seq ids `First (A.after ids cat) (A.before ids cat))
         ]
     , kind )
@@ -845,7 +849,7 @@ and trans_seq ({ ids; kind; _ } as ctx) = function
 ;;
 
 let compile_1 regexp =
-  let regexp = Ast.handle_case false regexp in
+  let regexp = Ast.handle_case regexp in
   let color_map = Color_map.make () in
   let need_lnl = Ast.colorize color_map regexp in
   let colors, boundary_table, color_repr = Color_map.flatten color_map in

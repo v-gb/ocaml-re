@@ -1,6 +1,7 @@
 (library
  (name re)
  (synopsis "Pure OCaml regular expression library")
+ (flags (:standard -alert -latin1))
  (public_name re))
 
 (copy_files#

@@ -170,5 +170,39 @@ include struct
   let group_count = group_count
 end
 
+module Latin1 = struct
+  let bow = bow
+  let eow = eow
+  let word = word
+  let not_boundary = not_boundary
+  let alnum = alnum
+  let wordc = wordc
+  let alpha = alpha
+  let cntrl = cntrl
+  let graph = graph
+  let lower = lower
+  let print = print
+  let punct = punct
+  let upper = upper
+  let no_case = no_case
+end
+
+module Ascii = struct
+  let alnum = Ast.cset Cset.Ascii.alnum
+  let wordc = Ast.cset Cset.Ascii.wordc
+  let alpha = Ast.cset Cset.Ascii.alpha
+  let cntrl = Ast.cset Cset.Ascii.cntrl
+  let graph = Ast.cset Cset.Ascii.graph
+  let lower = Ast.cset Cset.Ascii.lower
+  let print = Ast.cset Cset.Ascii.print
+  let punct = Ast.cset Cset.Ascii.punct
+  let upper = Ast.cset Cset.Ascii.upper
+  let bow = bow_ascii
+  let eow = eow_ascii
+  let word = word_ascii
+  let not_boundary = not_boundary_ascii
+  let no_case = no_case_ascii
+end
+
 module Seq = Search
 module Stream = Compile.Stream

@@ -85,29 +85,31 @@ let%expect_test "eol" =
 ;;
 
 let%expect_test "bow" =
-  test_re (seq [ bow; char 'a' ]) "a";
-  [%expect {| [| (0, 1) |] |}];
-  test_re (seq [ bow; char 'a' ]) "bb aa";
-  [%expect {| [| (3, 4) |] |}];
-  test_re (seq [ bow; char 'a' ]) "ba ba";
-  [%expect {| Not_found |}];
-  test_re bow ";";
-  [%expect {| Not_found |}];
-  test_re bow "";
-  [%expect {| Not_found |}]
+  List.iter [ Latin1.bow; Ascii.bow ] ~f:(fun bow ->
+    test_re (seq [ bow; char 'a' ]) "a";
+    [%expect {| [| (0, 1) |] |}];
+    test_re (seq [ bow; char 'a' ]) "bb aa";
+    [%expect {| [| (3, 4) |] |}];
+    test_re (seq [ bow; char 'a' ]) "ba ba";
+    [%expect {| Not_found |}];
+    test_re bow ";";
+    [%expect {| Not_found |}];
+    test_re bow "";
+    [%expect {| Not_found |}])
 ;;
 
 let%expect_test "eow" =
-  test_re (seq [ char 'a'; eow ]) "a";
-  [%expect {| [| (0, 1) |] |}];
-  test_re (seq [ char 'a'; eow ]) "bb aa";
-  [%expect {| [| (4, 5) |] |}];
-  test_re (seq [ char 'a'; eow ]) "ab ab";
-  [%expect {| Not_found |}];
-  test_re eow ";";
-  [%expect {| Not_found |}];
-  test_re eow "";
-  [%expect {| Not_found |}]
+  List.iter [ Latin1.eow; Ascii.eow ] ~f:(fun eow ->
+    test_re (seq [ char 'a'; eow ]) "a";
+    [%expect {| [| (0, 1) |] |}];
+    test_re (seq [ char 'a'; eow ]) "bb aa";
+    [%expect {| [| (4, 5) |] |}];
+    test_re (seq [ char 'a'; eow ]) "ab ab";
+    [%expect {| Not_found |}];
+    test_re eow ";";
+    [%expect {| Not_found |}];
+    test_re eow "";
+    [%expect {| Not_found |}])
 ;;
 
 let%expect_test "bos" =

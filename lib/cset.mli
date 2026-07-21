@@ -86,3 +86,16 @@ val prepend : t -> 'a list -> (t * 'a list) list -> (t * 'a list) list
 val pick : t -> c
 val offset : int -> t -> t
 val to_dyn : t -> Dyn.t
+
+module Ascii : sig
+  val lower : t
+  val upper : t
+  val alpha : t
+  val alnum : t
+  val wordc : t
+  val cntrl : t
+  val graph : t
+  val print : t
+  val punct : t
+  val case_insens : t -> t
+end

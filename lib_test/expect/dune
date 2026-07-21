@@ -11,6 +11,7 @@
   base
   str
   ppx_inline_test.config)
+ (flags (:standard -alert -latin1))
  (inline_tests
   (modes native js))
  (preprocess
@@ -35,5 +36,7 @@
 (subdir
  private_re
  (library
-  (name re_private))
+  (name re_private)
+  (flags (:standard -alert -latin1))
+ )
  (copy_files %{project_root}/lib/*.{ml,mli}))

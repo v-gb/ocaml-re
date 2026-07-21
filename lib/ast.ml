@@ -1,15 +1,44 @@
 open Import
 
+module Ascii_or_latin1 = struct
+  type t =
+    [ `Ascii
+    | `Latin1
+    ]
+
+  let equal t1 t2 =
+    match t1, t2 with
+    | `Ascii, `Ascii -> true
+    | `Ascii, _ | _, `Ascii -> false
+    | `Latin1, `Latin1 -> true
+  ;;
+
+  let combine t_opt t =
+    match t_opt, t with
+    | None, _ -> t
+    | Some `Ascii, `Ascii -> `Ascii
+    | Some `Latin1, _ | Some _, `Latin1 -> `Latin1
+  ;;
+
+  let to_string = function
+    | `Ascii -> "ascii"
+    | `Latin1 -> "latin1"
+  ;;
+
+  let to_dyn t = Dyn.string (to_string t)
+  let pp f t = Fmt.str f (to_string t)
+end
+
 type ('a, _) ast =
   | Alternative : 'a list -> ('a, [> `Uncased ]) ast
-  | No_case : 'a -> ('a, [> `Cased ]) ast
+  | No_case : Ascii_or_latin1.t * 'a -> ('a, [> `Cased ]) ast
   | Case : 'a -> ('a, [> `Cased ]) ast
 
 let dyn_of_ast f =
   let open Dyn in
   function
   | Alternative xs -> variant "Alternative" (List.map xs ~f)
-  | No_case a -> variant "No_case" [ f a ]
+  | No_case (al, a) -> variant "No_case" [ string (Ascii_or_latin1.to_string al); f a ]
   | Case a -> variant "Case" [ f a ]
 ;;
 
@@ -26,7 +55,8 @@ let pp_ast (type a b) f fmt (ast : (a, b) ast) =
   match ast with
   | Alternative alt -> sexp fmt "Alternative" (list f) alt
   | Case c -> var "Case" c
-  | No_case c -> var "No_case" c
+  | No_case (al, c) ->
+    sexp fmt "No_case" (Fmt.pair str f) (Ascii_or_latin1.to_string al, c)
 ;;
 
 type cset =
@@ -53,9 +83,9 @@ type ('a, 'case) gen =
   | Repeat of ('a, 'case) gen * int * int option
   | Beg_of_line
   | End_of_line
-  | Beg_of_word
-  | End_of_word
-  | Not_bound
+  | Beg_of_word of Ascii_or_latin1.t
+  | End_of_word of Ascii_or_latin1.t
+  | Not_bound of Ascii_or_latin1.t
   | Beg_of_str
   | End_of_str
   | Last_end_of_line
@@ -83,9 +113,9 @@ let rec dyn_of_gen f =
     variant "Repeat" (dyn_of_gen f gen :: int min :: base)
   | Beg_of_line -> enum "Beg_of_line"
   | End_of_line -> enum "End_of_line"
-  | Beg_of_word -> enum "Beg_of_word"
-  | End_of_word -> enum "End_of_word"
-  | Not_bound -> enum "Not_bound"
+  | Beg_of_word al -> variant "Beg_of_word" [ Ascii_or_latin1.to_dyn al ]
+  | End_of_word al -> variant "End_of_word" [ Ascii_or_latin1.to_dyn al ]
+  | Not_bound al -> variant "Not_bound" [ Ascii_or_latin1.to_dyn al ]
   | Beg_of_str -> enum "Beg_of_str"
   | End_of_str -> enum "End_of_str"
   | Last_end_of_line -> enum "Last_end_of_line"
@@ -167,12 +197,14 @@ let cset_to_api' cset =
     | _ -> call' "alt" [ List l ])
 ;;
 
+let al_ident al s = String.capitalize_ascii (Ascii_or_latin1.to_string al) ^ "." ^ s
+
 let ast_to_api (type a b) a_to_api (ast : (a, b) ast) =
   let open Minicaml in
   match ast with
   | Alternative alt -> call' "alt" [ List (List.map alt ~f:a_to_api) ]
   | Case c -> call' "case" [ a_to_api c ]
-  | No_case c -> call' "no_case" [ a_to_api c ]
+  | No_case (al, c) -> call' (al_ident al "no_case") [ a_to_api c ]
 ;;
 
 let rec to_api cset_to_api t =
@@ -197,9 +229,9 @@ let rec to_api cset_to_api t =
          ])
   | Beg_of_line -> ident "bol"
   | End_of_line -> ident "eol"
-  | Beg_of_word -> ident "bow"
-  | End_of_word -> ident "eow"
-  | Not_bound -> ident "not_boundary"
+  | Beg_of_word al -> ident (al_ident al "bow")
+  | End_of_word al -> ident (al_ident al "eow")
+  | Not_bound al -> ident (al_ident al "not_boundary")
   | Beg_of_str -> ident "bos"
   | End_of_str -> ident "eos"
   | Last_end_of_line -> ident "lnl"
@@ -250,9 +282,9 @@ let rec pp_gen pp_cset fmt t =
     sexp fmt "Repeat" pp' ()
   | Beg_of_line -> str fmt "Beg_of_line"
   | End_of_line -> str fmt "End_of_line"
-  | Beg_of_word -> str fmt "Beg_of_word"
-  | End_of_word -> str fmt "End_of_word"
-  | Not_bound -> str fmt "Not_bound"
+  | Beg_of_word al -> sexp fmt "Beg_of_word" Ascii_or_latin1.pp al
+  | End_of_word al -> sexp fmt "End_of_word" Ascii_or_latin1.pp al
+  | Not_bound al -> sexp fmt "Not_found" Ascii_or_latin1.pp al
   | Beg_of_str -> str fmt "Beg_of_str"
   | End_of_str -> str fmt "End_of_str"
   | Last_end_of_line -> str fmt "Last_end_of_line"
@@ -287,14 +319,14 @@ let rec equal cset x1 x2 =
     Int.equal i1 i2 && Option.equal Int.equal j1 j2 && equal cset x1' x2'
   | Beg_of_line, Beg_of_line
   | End_of_line, End_of_line
-  | Beg_of_word, Beg_of_word
-  | End_of_word, End_of_word
-  | Not_bound, Not_bound
   | Beg_of_str, Beg_of_str
   | End_of_str, End_of_str
   | Last_end_of_line, Last_end_of_line
   | Start, Start
   | Stop, Stop -> true
+  | Beg_of_word al1, Beg_of_word al2
+  | End_of_word al1, End_of_word al2
+  | Not_bound al1, Not_bound al2 -> Ascii_or_latin1.equal al1 al2
   | Group _, Group _ ->
     (* Do not merge groups! *)
     false
@@ -315,7 +347,11 @@ let pp_api fmt t = Minicaml.pp ~under_apply:false fmt (to_api cset_to_api t)
 let cset cset = Set (Cset cset)
 
 let rec handle_case_cset ign_case = function
-  | Cset s -> if ign_case then Cset.case_insens s else s
+  | Cset s ->
+    (match ign_case with
+     | Some `Latin1 -> Cset.case_insens s
+     | Some `Ascii -> Cset.Ascii.case_insens s
+     | None -> s)
   | Cast (Alternative l) -> List.map ~f:(handle_case_cset ign_case) l |> Cset.union_all
   | Complement l ->
     List.map ~f:(handle_case_cset ign_case) l |> Cset.union_all |> Cset.diff Cset.cany
@@ -324,8 +360,9 @@ let rec handle_case_cset ign_case = function
       (handle_case_cset ign_case r)
       (Cset.diff Cset.cany (handle_case_cset ign_case r'))
   | Intersection l -> List.map ~f:(handle_case_cset ign_case) l |> Cset.intersect_all
-  | Cast (No_case a) -> handle_case_cset true a
-  | Cast (Case a) -> handle_case_cset false a
+  | Cast (No_case (al, a)) ->
+    handle_case_cset (Some (Ascii_or_latin1.combine ign_case al)) a
+  | Cast (Case a) -> handle_case_cset None a
 ;;
 
 let rec handle_case ign_case : t -> (Cset.t, [ `Uncased ]) gen = function
@@ -337,9 +374,9 @@ let rec handle_case ign_case : t -> (Cset.t, [ `Uncased ]) gen = function
   | Repeat (r, i, j) -> Repeat (handle_case ign_case r, i, j)
   | ( Beg_of_line
     | End_of_line
-    | Beg_of_word
-    | End_of_word
-    | Not_bound
+    | Beg_of_word _
+    | End_of_word _
+    | Not_bound _
     | Beg_of_str
     | End_of_str
     | Last_end_of_line
@@ -350,10 +387,12 @@ let rec handle_case ign_case : t -> (Cset.t, [ `Uncased ]) gen = function
   | Group (n, r) -> Group (n, handle_case ign_case r)
   | No_group r -> No_group (handle_case ign_case r)
   | Nest r -> Nest (handle_case ign_case r)
-  | Ast (Case r) -> handle_case false r
-  | Ast (No_case r) -> handle_case true r
+  | Ast (Case r) -> handle_case None r
+  | Ast (No_case (al, r)) -> handle_case (Some (Ascii_or_latin1.combine ign_case al)) r
   | Pmark (i, r) -> Pmark (i, handle_case ign_case r)
 ;;
+
+let handle_case t = handle_case None t
 
 module Export = struct
   type nonrec t = t
@@ -419,10 +458,14 @@ module Export = struct
   let opt r = repn r 0 (Some 1)
   let bol = Beg_of_line
   let eol = End_of_line
-  let bow = Beg_of_word
-  let eow = End_of_word
+  let bow = Beg_of_word `Latin1
+  let bow_ascii = Beg_of_word `Ascii
+  let eow = End_of_word `Latin1
+  let eow_ascii = End_of_word `Ascii
   let word r = seq [ bow; r; eow ]
-  let not_boundary = Not_bound
+  let word_ascii r = seq [ bow_ascii; r; eow_ascii ]
+  let not_boundary = Not_bound `Latin1
+  let not_boundary_ascii = Not_bound `Ascii
   let bos = Beg_of_str
   let eos = End_of_str
   let whole_string r = seq [ bos; r; eos ]
@@ -481,7 +524,12 @@ module Export = struct
   ;;
 
   let no_case =
-    let f = { f = (fun r -> No_case r) } in
+    let f = { f = (fun r -> No_case (`Latin1, r)) } in
+    fun t -> make_set f t
+  ;;
+
+  let no_case_ascii =
+    let f = { f = (fun r -> No_case (`Ascii, r)) } in
     fun t -> make_set f t
   ;;
 
@@ -503,16 +551,16 @@ module Export = struct
       | Sem_greedy (_, r) | Sem (_, r) | Nest r | Pmark (_, r) | Group (_, r) -> witness r
       | Beg_of_line
       | End_of_line
-      | Beg_of_word
-      | End_of_word
-      | Not_bound
+      | Beg_of_word _
+      | End_of_word _
+      | Not_bound _
       | Beg_of_str
       | Last_end_of_line
       | Start
       | Stop
       | End_of_str -> ""
     in
-    witness (handle_case false t)
+    witness (handle_case t)
   ;;
 end
 
@@ -538,7 +586,12 @@ let colorize color_map (regexp : no_case) =
     | Ast (Alternative l) -> List.iter ~f:colorize l
     | Repeat (r, _, _) -> colorize r
     | Beg_of_line | End_of_line -> Color_map.split color_map Cset.nl
-    | Beg_of_word | End_of_word | Not_bound -> Color_map.split color_map Cset.cword
+    | Beg_of_word al | End_of_word al | Not_bound al ->
+      Color_map.split
+        color_map
+        (match al with
+         | `Latin1 -> Cset.cword
+         | `Ascii -> Cset.Ascii.wordc)
     | Beg_of_str | End_of_str | Start | Stop -> ()
     | Last_end_of_line -> lnl := true
     | No_group r | Group (_, r) | Nest r | Pmark (_, r) -> colorize r
@@ -550,7 +603,7 @@ let colorize color_map (regexp : no_case) =
 
 let rec anchored_ast : (t, _) ast -> bool = function
   | Alternative als -> List.for_all ~f:anchored als
-  | No_case r | Case r -> anchored r
+  | No_case (_, r) | Case r -> anchored r
 
 and anchored : t -> bool = function
   | Ast a -> anchored_ast a
@@ -561,9 +614,9 @@ and anchored : t -> bool = function
   | Set _
   | Beg_of_line
   | End_of_line
-  | Beg_of_word
-  | End_of_word
-  | Not_bound
+  | Beg_of_word _
+  | End_of_word _
+  | Not_bound _
   | End_of_str
   | Last_end_of_line
   | Stop -> false

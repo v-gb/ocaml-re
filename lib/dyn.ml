@@ -8,6 +8,12 @@ type t =
   | Record of (string * t) list
 
 let variant x y = Variant (x, y)
+
+let bool = function
+  | true -> Enum "true"
+  | false -> Enum "false"
+;;
+
 let list x = List x
 let int x = Int x
 let pair x y = Tuple [ x; y ]

@@ -1,6 +1,13 @@
+module Ascii_or_latin1 : sig
+  type t =
+    [ `Ascii
+    | `Latin1
+    ]
+end
+
 type ('a, _) ast = private
   | Alternative : 'a list -> ('a, [> `Uncased ]) ast
-  | No_case : 'a -> ('a, [> `Cased ]) ast
+  | No_case : Ascii_or_latin1.t * 'a -> ('a, [> `Cased ]) ast
   | Case : 'a -> ('a, [> `Cased ]) ast
 
 type cset = private
@@ -17,9 +24,9 @@ type ('a, 'case) gen = private
   | Repeat of ('a, 'case) gen * int * int option
   | Beg_of_line
   | End_of_line
-  | Beg_of_word
-  | End_of_word
-  | Not_bound
+  | Beg_of_word of Ascii_or_latin1.t
+  | End_of_word of Ascii_or_latin1.t
+  | Not_bound of Ascii_or_latin1.t
   | Beg_of_str
   | End_of_str
   | Last_end_of_line
@@ -39,7 +46,7 @@ val to_dyn : t -> Dyn.t
 val pp : t Fmt.t
 val pp_api : t Fmt.t
 val merge_sequences : (Cset.t, [ `Uncased ]) gen list -> (Cset.t, [ `Uncased ]) gen list
-val handle_case : bool -> t -> (Cset.t, [ `Uncased ]) gen
+val handle_case : t -> (Cset.t, [ `Uncased ]) gen
 val anchored : t -> bool
 val colorize : Color_map.t -> (Cset.t, [ `Uncased ]) gen -> bool
 
@@ -50,6 +57,7 @@ module Export : sig
   val epsilon : t
   val str : string -> t
   val no_case : t -> t
+  val no_case_ascii : t -> t
   val case : t -> t
   val diff : t -> t -> t
   val compl : t list -> t
@@ -68,12 +76,16 @@ module Export : sig
   val non_greedy : t -> t
   val stop : t
   val not_boundary : t
+  val not_boundary_ascii : t
   val group : ?name:string -> t -> t
   val word : t -> t
+  val word_ascii : t -> t
   val first : t -> t
   val bos : t
   val bow : t
+  val bow_ascii : t
   val eow : t
+  val eow_ascii : t
   val eos : t
   val bol : t
   val start : t

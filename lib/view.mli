@@ -28,6 +28,13 @@ module Rep_kind : sig
     ]
 end
 
+module Ascii_or_latin1 : sig
+  type t =
+    [ `Ascii
+    | `Latin1
+    ]
+end
+
 type t =
   | Set of Cset.t
   | Sequence of Ast.t list
@@ -35,9 +42,9 @@ type t =
   | Repeat of Ast.t * int * int option
   | Beg_of_line
   | End_of_line
-  | Beg_of_word
-  | End_of_word
-  | Not_bound
+  | Beg_of_word of Ascii_or_latin1.t
+  | End_of_word of Ascii_or_latin1.t
+  | Not_bound of Ascii_or_latin1.t
   | Beg_of_str
   | End_of_str
   | Last_end_of_line
@@ -49,7 +56,7 @@ type t =
   | No_group of Ast.t
   | Nest of Ast.t
   | Case of Ast.t
-  | No_case of Ast.t
+  | No_case of Ascii_or_latin1.t * Ast.t
   | Intersection of Ast.t list
   | Complement of Ast.t list
   | Difference of Ast.t * Ast.t

@@ -22,6 +22,7 @@ end
 
 module Sem = Automata.Sem
 module Rep_kind = Automata.Rep_kind
+module Ascii_or_latin1 = Ast.Ascii_or_latin1
 
 type t =
   | Set of Cset.t
@@ -30,9 +31,9 @@ type t =
   | Repeat of Ast.t * int * int option
   | Beg_of_line
   | End_of_line
-  | Beg_of_word
-  | End_of_word
-  | Not_bound
+  | Beg_of_word of Ascii_or_latin1.t
+  | End_of_word of Ascii_or_latin1.t
+  | Not_bound of Ascii_or_latin1.t
   | Beg_of_str
   | End_of_str
   | Last_end_of_line
@@ -44,7 +45,7 @@ type t =
   | No_group of Ast.t
   | Nest of Ast.t
   | Case of Ast.t
-  | No_case of Ast.t
+  | No_case of Ascii_or_latin1.t * Ast.t
   | Intersection of Ast.t list
   | Complement of Ast.t list
   | Difference of Ast.t * Ast.t
@@ -53,7 +54,7 @@ type t =
 let view_ast f (t : _ Ast.ast) : t =
   match t with
   | Alternative a -> Alternative (List.map ~f a)
-  | No_case a -> No_case (f a)
+  | No_case (al, a) -> No_case (al, f a)
   | Case a -> Case (f a)
 ;;
 
@@ -75,9 +76,9 @@ let view : Ast.t -> t = function
   | Repeat (t, x, y) -> Repeat (t, x, y)
   | Beg_of_line -> Beg_of_line
   | End_of_line -> End_of_line
-  | Beg_of_word -> Beg_of_word
-  | End_of_word -> End_of_word
-  | Not_bound -> Not_bound
+  | Beg_of_word al -> Beg_of_word al
+  | End_of_word al -> End_of_word al
+  | Not_bound al -> Not_bound al
   | Beg_of_str -> Beg_of_str
   | End_of_str -> End_of_str
   | Last_end_of_line -> Last_end_of_line

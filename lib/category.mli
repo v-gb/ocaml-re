@@ -9,11 +9,15 @@ val ( ++ ) : t -> t -> t
 val from_char : char -> t
 val dummy : t
 val inexistant : t
-val letter : t
-val not_letter : t
+val ascii_letter : t
+val not_ascii_letter : t
 val newline : t
 val lastnewline : t
 val search_boundary : t
+val latin1_letter : t
+val not_latin1_letter : t
+val letter : [ `Ascii | `Latin1 ] -> t
+val not_letter : [ `Ascii | `Latin1 ] -> t
 val to_int : t -> int
 val equal : t -> t -> bool
 val compare : t -> t -> int

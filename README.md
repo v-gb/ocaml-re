@@ -1,3 +1,12 @@
+This is a branch of ocaml-re that, compared to the main branch:
+
+- alerts on use of latin1 constructions (`Re.{word,bow,no_case}` etc),
+  and provides `Re.Latin1.{word,bow,no_case}` for explicit use
+- provides an `Re.Ascii` submodule which mirrors all latin1 construction
+  with their ascii counterpart
+
+The original ocaml-re readme follows.
+
 Description
 ===========
 

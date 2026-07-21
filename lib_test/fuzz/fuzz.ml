@@ -223,9 +223,9 @@ module Compare_to_reference = struct
       | Set _
       | Beg_of_line
       | End_of_line
-      | Beg_of_word
-      | End_of_word
-      | Not_bound
+      | Beg_of_word _
+      | End_of_word _
+      | Not_bound _
       | Beg_of_str
       | End_of_str
       | Sem _ -> f k
@@ -275,15 +275,15 @@ module Compare_to_reference = struct
         (match peek_ahead ctx state.pos with
          | Some '\n' | None -> k state
          | _ -> ())
-      | Beg_of_word ->
+      | Beg_of_word _ ->
         (match wordc (peek_behind ctx state.pos), wordc (peek_ahead ctx state.pos) with
          | (None | Some false), Some true -> k state
          | _ -> ())
-      | End_of_word ->
+      | End_of_word _ ->
         (match wordc (peek_behind ctx state.pos), wordc (peek_ahead ctx state.pos) with
          | Some true, (None | Some false) -> k state
          | _ -> ())
-      | Not_bound -> assert false
+      | Not_bound _ -> assert false
       | Beg_of_str ->
         (match peek_behind ctx state.pos with
          | None -> k state

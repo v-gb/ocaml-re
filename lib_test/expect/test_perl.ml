@@ -137,9 +137,9 @@ let%expect_test "character sets" =
 
 let%expect_test "zero-width assertions" =
   re "\\b";
-  [%expect {| (Alternative Beg_of_wordEnd_of_word) |}];
+  [%expect {| (Alternative (Beg_of_word latin1)(End_of_word latin1)) |}];
   re "\\B";
-  [%expect {| Not_bound |}];
+  [%expect {| (Not_found latin1) |}];
   re "\\A";
   [%expect {| Beg_of_str |}];
   re "\\Z";
@@ -154,7 +154,7 @@ let%expect_test "options" =
   re ~opts:[ `Anchored ] "a";
   [%expect {| (Sequence Start(Set 97)) |}];
   re ~opts:[ `Caseless ] "b";
-  [%expect {| (No_case (Set 98)) |}];
+  [%expect {| (No_case latin1 (Set 98)) |}];
   re ~opts:[ `Dollar_endonly ] "$";
   [%expect {| Last_end_of_line |}];
   re ~opts:[ `Dollar_endonly; `Multiline ] "$";

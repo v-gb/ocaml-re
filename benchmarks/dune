@@ -6,6 +6,7 @@
 (executables
  (enabled_if
   (not %{env:CI=false}))
+ (flags (:standard -alert -latin1))
  (libraries
   re
   core

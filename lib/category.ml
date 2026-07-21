@@ -8,22 +8,30 @@ let intersect x y = x land y <> 0
 let ( ++ ) x y = x lor y
 let dummy = -1
 let inexistant = 1
-let letter = 2
-let not_letter = 4
+let ascii_letter = 2
+let not_ascii_letter = 4
 let newline = 8
 let lastnewline = 16
 let search_boundary = 32
+let latin1_letter = 64
+let not_latin1_letter = 128
 let to_dyn = Dyn.int
 
 let from_char = function
   (* Should match [cword] definition *)
-  | 'a' .. 'z'
-  | 'A' .. 'Z'
-  | '0' .. '9'
-  | '_' | '\170' | '\181' | '\186'
-  | '\192' .. '\214'
-  | '\216' .. '\246'
-  | '\248' .. '\255' -> letter
-  | '\n' -> not_letter ++ newline
-  | _ -> not_letter
+  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> ascii_letter ++ latin1_letter
+  | '\170' | '\181' | '\186' | '\192' .. '\214' | '\216' .. '\246' | '\248' .. '\255' ->
+    not_ascii_letter ++ latin1_letter
+  | '\n' -> not_ascii_letter ++ not_latin1_letter ++ newline
+  | _ -> not_latin1_letter ++ not_ascii_letter
+;;
+
+let letter = function
+  | `Ascii -> ascii_letter
+  | `Latin1 -> latin1_letter
+;;
+
+let not_letter = function
+  | `Ascii -> not_ascii_letter
+  | `Latin1 -> not_latin1_letter
 ;;

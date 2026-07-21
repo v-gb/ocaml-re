@@ -263,3 +263,22 @@ let punct =
     ; char '\247'
     ]
 ;;
+
+module Ascii = struct
+  let lower = rg 'a' 'z'
+  let upper = rg 'A' 'Z'
+  let alpha = union_all [ lower; upper ]
+  let alnum = union_all [ alpha; cdigit ]
+  let wordc = union_all [ alnum; char '_' ]
+  let cntrl = union_all [ rg '\000' '\031'; char '\127' ]
+  let graph = rg '\033' '\126'
+  let print = rg '\032' '\126'
+
+  let punct =
+    union_all [ rg '\033' '\047'; rg '\058' '\064'; rg '\091' '\096'; rg '\123' '\126' ]
+  ;;
+
+  let case_insens s =
+    union_all [ s; offset 32 (inter s upper); offset (-32) (inter s clower) ]
+  ;;
+end

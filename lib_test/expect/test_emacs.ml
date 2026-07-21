@@ -90,13 +90,13 @@ let%expect_test "contexts" =
   re "\\=";
   [%expect {| Start |}];
   re "\\b";
-  [%expect {| (Alternative Beg_of_wordEnd_of_word) |}];
+  [%expect {| (Alternative (Beg_of_word latin1)(End_of_word latin1)) |}];
   re "\\B";
-  [%expect {| Not_bound |}];
+  [%expect {| (Not_found latin1) |}];
   re "\\<";
-  [%expect {| Beg_of_word |}];
+  [%expect {| (Beg_of_word latin1) |}];
   re "\\>";
-  [%expect {| End_of_word |}]
+  [%expect {| (End_of_word latin1) |}]
 ;;
 
 let%expect_test "word-constituent" =

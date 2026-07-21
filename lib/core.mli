@@ -536,9 +536,13 @@ val eol : t
 
 (** Beginning of word *)
 val bow : t
+[@@alert latin1 "Use Latin1.bow for compatible behavior, or Ascii.bow"]
+[@@migrate { repl = Rel.Latin1.bow }]
 
 (** End of word *)
 val eow : t
+[@@alert latin1 "Use Latin1.bow for compatible behavior, or Ascii.bow"]
+[@@migrate { repl = Rel.Latin1.eow }]
 
 (** Beginning of string. This differs from {!start} because it matches
     the beginning of the input string even when using [~pos] arguments:
@@ -571,9 +575,13 @@ val stop : t
 
 (** Word *)
 val word : t -> t
+[@@alert latin1 "Use Latin1.for compatible behavior, word or Ascii.word"]
+[@@migrate { repl = Rel.Latin1.word }]
 
 (** Not at a word boundary *)
 val not_boundary : t
+[@@alert latin1 "Use Latin1.not_boundary for compatible behavior, or Ascii.not_boundary"]
+[@@migrate { repl = Rel.Latin1.not_boundary }]
 
 (** Only matches the whole string, i.e. [fun t -> seq [ bos; t; eos ]]. *)
 val whole_string : t -> t
@@ -676,30 +684,109 @@ val any : t
 val notnl : t
 
 val alnum : t
+[@@alert latin1 "Use Latin1.alnum for compatible behavior, or Ascii.alnum"]
+[@@migrate { repl = Rel.Latin1.alnum }]
+
 val wordc : t
+[@@alert latin1 "Use Latin1.for compatible behavior, wordc or Ascii.wordc"]
+[@@migrate { repl = Rel.Latin1.wordc }]
+
 val alpha : t
+[@@alert latin1 "Use Latin1.alpha for compatible behavior, or Ascii.alpha"]
+[@@migrate { repl = Rel.Latin1.alpha }]
+
 val ascii : t
 val blank : t
+
 val cntrl : t
+[@@alert latin1 "Use Latin1.cntrl for compatible behavior, or Ascii.cntrl"]
+[@@migrate { repl = Rel.Latin1.cntrl }]
+
 val digit : t
+
 val graph : t
+[@@alert latin1 "Use Latin1.graph for compatible behavior, or Ascii.graph"]
+[@@migrate { repl = Rel.Latin1.graph }]
+
 val lower : t
+[@@alert latin1 "Use Latin1.lower for compatible behavior, or Ascii.lower"]
+[@@migrate { repl = Rel.Latin1.lower }]
+
 val print : t
+[@@alert latin1 "Use Latin1.print for compatible behavior, or Ascii.print"]
+[@@migrate { repl = Rel.Latin1.print }]
+
 val punct : t
+[@@alert latin1 "Use Latin1.punct for compatible behavior, or Ascii.punct"]
+[@@migrate { repl = Rel.Latin1.punct }]
+
 val space : t
+
 val upper : t
+[@@alert latin1 "Use Latin1.upper for compatible behavior, or Ascii.upper"]
+[@@migrate { repl = Rel.Latin1.upper }]
+
 val xdigit : t
 
 (** {2 Case modifiers} *)
 
-(** Case sensitive matching. Note that this works on latin1, not ascii and not
-    utf8. *)
+(** Case sensitive matching. *)
 val case : t -> t
 
 (** Case insensitive matching. Note that this works on latin1, not ascii and not
     utf8. *)
 val no_case : t -> t
+[@@alert latin1 "Use Latin1.no_case for compatible behavior, or Ascii.no_case"]
+[@@migrate { repl = Rel.Latin1.no_case }]
 
+module Ascii : sig
+  (** Combinators that applies any text, but only do interesting things with ascii
+      letters, punctuation, etc. *)
+
+  val bow : t
+  val eow : t
+  val word : t -> t
+  val not_boundary : t
+  val alnum : t
+  val wordc : t
+  val alpha : t
+  val cntrl : t
+  val graph : t
+  val lower : t
+  val print : t
+  val punct : t
+  val upper : t
+  val no_case : t -> t
+end
+
+module Latin1 : sig
+  (** Beginning of word *)
+  val bow : t
+
+  (** End of word *)
+  val eow : t
+
+  (** Word *)
+  val word : t -> t
+
+  (** Not at a word boundary *)
+  val not_boundary : t
+
+  val alnum : t
+  val wordc : t
+  val alpha : t
+  val cntrl : t
+  val graph : t
+  val lower : t
+  val print : t
+  val punct : t
+  val upper : t
+
+  (** {2 Case modifiers} *)
+
+  (** Case insensitive matching *)
+  val no_case : t -> t
+end
 (****)
 
 (** {2 Internal debugging} *)
