@@ -207,7 +207,21 @@ let%expect_test "lookahead" =
   test_re (alt [ group eol; lookahead `Neg (set "a") ]) "";
   [%expect {| [| (0, 0); (0, 0) |] |}];
   test_re (shortest (alt [ group eol; lookahead `Neg (set "a") ])) "";
-  [%expect {| [| (0, 0); (0, 0) |] |}]
+  [%expect {| [| (0, 0); (0, 0) |] |}];
+  let re = lookahead `Pos (seq [ rep (char 'a'); lookbehind `Neg epsilon ]) in
+  (* Without enough deduplication, each new character adds a new state which differs
+     from the previous one by having an extra:
+     {[
+       (TSide_condition
+         ((TMatch ((marks ((1 2) (0 2))))))
+         Pos
+         ((TSeq:F ((TExp (Rep:NF 1))) (Lookbehind Neg Eps 0))))
+     ]}
+  *)
+  let re = Re.compile re in
+  ignore (Re.execp re (String.make 500 'a'));
+  Printf.printf "%d\n%!" (Re.nstates re);
+  [%expect {| 4 |}]
 ;;
 
 let%expect_test "lookbehind" =

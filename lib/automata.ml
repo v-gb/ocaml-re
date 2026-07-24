@@ -725,6 +725,23 @@ end = struct
        or similar functions.
     *)
 
+    let rec equal_ign_mark_list l1 l2 = List.equal ~eq:equal_ign_marks l1 l2
+
+    and equal_ign_marks x y =
+      match x, y with
+      | TSeq (_, l1, e1), TSeq (_, l2, e2) ->
+        Id.equal e1.id e2.id && equal_ign_mark_list l1 l2
+      | TExp (_marks1, e1), TExp (_marks2, e2) -> Id.equal e1.id e2.id
+      | TMatch _marks1, TMatch _marks2 -> true
+      | TSide_condition (b1, main1, pn1, cond1), TSide_condition (b2, main2, pn2, cond2)
+        ->
+        Bool.equal b1 b2
+        && Pos_or_neg.equal pn1 pn2
+        && equal_ign_mark_list main1 main2
+        && equal_ign_mark_list cond1 cond2
+      | (TSeq _ | TExp _ | TMatch _ | TSide_condition _), _ -> false
+    ;;
+
     let rec equal_list l1 l2 = List.equal ~eq:equal l1 l2
 
     and equal x y =
@@ -740,6 +757,25 @@ end = struct
         && equal_list main1 main2
         && equal_list cond1 cond2
       | (TSeq _ | TExp _ | TMatch _ | TSide_condition _), _ -> false
+    ;;
+
+    (* Compared to the main hash function, these functions ignore marks, but also do
+       not recurse. Recursing in the hash would create bad complexity when also
+       recursing down the structure. Instead you have to fuse both recursions. *)
+    let hash_ign_marks_tseq _kind l_hash e accu =
+      hash_combine 0x172a1bce (hash_combine (Id.hash e.id) (hash_combine l_hash accu))
+    ;;
+
+    let hash_ign_marks_texp _marks e accu =
+      hash_combine 0x2b4c0d77 (hash_combine (Id.hash e.id) accu)
+    ;;
+
+    let hash_ign_marks_tmatch _marks accu = hash_combine 0x1c205ad5 accu
+
+    let hash_ign_marks_tside_condition _has_match l1_hash pn l2_hash accu =
+      hash_combine
+        1
+        (hash_combine l1_hash (Pos_or_neg.hash pn (hash_combine l2_hash accu)))
     ;;
 
     let rec hash (t : t) accu =
@@ -1015,40 +1051,155 @@ end = struct
   let add_eps t marks = TExp (marks, eps_expr) :: t
   let add_expr t expr = expr :: t
 
+  module H = Hashtbl.Make (struct
+      type t = int * E.t
+
+      let equal (h1, e1) (h2, e2) = h1 = h2 && equal_ign_marks e1 e2
+      let hash = fst
+    end)
+
+  let remove_duplicates_naive =
+    (* remove_duplicates can apparently afford to compare ids and that's it. Given a list:
+
+       [ TSeq ([TExp exp1], exp2); TSeq ([TExp exp1], exp3) ]
+
+       remove_duplicates would remove the second exp1 as a duplicate, thus turning the
+       list into:
+
+       [ TSeq ([TExp exp1], exp2) ]
+
+       If exp2 and exp3 were arbitrary expression, this would obviously be incorrect.
+       I think this is justified by the invariant that TExp exp1 is necessarily
+       followed by its continuation from the original expr. Because exp1 is unique
+       across the expr (even when we have Repeat nodes that copy-paste a node, rename
+       ensures their ids are made unique), it has a single continuation, and thus exp2
+       = exp3.
+
+       The reasoning doesn't obviously hold for rep a. rep a is effectively the infinite
+       sequence a(a(a(...)|eps)|eps)|eps, with the _same_ id for each a. But each
+       instance still has the same continuation, namely rep a, which itself has the
+       same continuation.
+
+       Now, what happens with lookaheads. If you delta:
+
+       seq [ alt [ lookahead exp1; epsilon ]; eps2; exp3 ]
+
+       you end up with:
+
+       TSeq ([ TSide_condition (exp2', _, exp1'); exp2' ], exp3)
+
+       Discarding the second exp2' would clearly be incorrect. The continuation of
+       exp2' in the first case is unclear, but it's certainly not just exp3 like it
+       is in the second case.
+       If the alternatives were reversed, then it would make sense to discard the
+       tside_condition. But this would be an optimization rather than something
+       necessary to preserve the finite of the automaton.
+
+       Also we can't just remove subexpressions in the side condition. If we started
+       with seq [ alt [ eps; eps ]; lookahead `Neg exp1 ], which deltas into:
+
+       [ TSide_condition (match, `Neg, exp1); TSide_condition (match, `Neg, exp1) ]
+
+       We certainly can't filter out the second exp1, because then the _negative_
+       lookahead would evaluate to eps. We instead have to filter out the whole
+       TSide_condition constructor.
+
+       It seems like we should filter only within a list of alternatives, not across
+       lists, but do a full comparison. It might be possible to be more efficient,
+       say instead of keying by continuation, keying by (continuation, surrounding
+       side_conditions), but that sounds like a problem for another day.
+    *)
+    (* [loop] computes the hash of the input into its parameter, so we can avoid
+       quadratic complexity in the nesting of desc. *)
+    let rec loop h l acc_hash =
+      match l with
+      | [] -> []
+      | elt :: rem ->
+        (match elt with
+         | TMatch marks ->
+           acc_hash := hash_ign_marks_tmatch marks !acc_hash;
+           [ elt ]
+         | TSeq (kind, a, b) ->
+           let a, a_hash = loop_nested a in
+           let table_elt = hash_ign_marks_tseq kind a_hash b 23427399, elt in
+           acc_hash := hash_combine (fst table_elt) !acc_hash;
+           if H.mem h table_elt
+           then loop h rem acc_hash
+           else (
+             H.add h table_elt ();
+             tseq kind a b (loop h rem acc_hash))
+         | TExp (a, b) ->
+           let table_elt = hash_ign_marks_texp a b 23487239, elt in
+           acc_hash := hash_combine (fst table_elt) !acc_hash;
+           if H.mem h table_elt
+           then loop h rem acc_hash
+           else (
+             H.add h table_elt ();
+             elt :: loop h rem acc_hash)
+         | TSide_condition (has_match, l1, pn, l2) ->
+           let l1, l1_hash = loop_nested l1 in
+           let l2, l2_hash = loop_nested l2 in
+           let table_elt =
+             hash_ign_marks_tside_condition has_match l1_hash pn l2_hash 239487, elt
+           in
+           acc_hash := hash_combine (fst table_elt) !acc_hash;
+           if H.mem h table_elt
+           then loop h rem acc_hash
+           else (
+             H.add h table_elt ();
+             tside_condition l1 pn l2 (loop h rem acc_hash)))
+    and loop_nested l =
+      (* not reusing the hashtbl, as it doesn't feel worth the extra gc promotion *)
+      let acc_hash = ref 2913847 in
+      let l = loop (H.create 3) l acc_hash in
+      l, !acc_hash
+    in
+    loop_nested
+  ;;
+
   let remove_duplicates =
-    let rec loop seen l y =
+    let rec loop seen fallback l y =
       match l with
       | [] -> []
       | (TMatch _ as x) :: _ ->
         (* Truncate after first match *)
         [ x ]
       | TSeq (kind, l, x) :: r ->
-        let l = loop seen l x in
-        let r = loop seen r y in
+        let l = loop_nested seen fallback l x in
+        let r = loop seen fallback r y in
         tseq kind l x r
       | (TExp (_marks, { def = Eps; _ }) as e) :: r ->
         if Id.Hash_set.mem seen y.id
-        then loop seen r y
+        then loop seen fallback r y
         else (
           Id.Hash_set.add seen y.id;
-          e :: loop seen r y)
+          e :: loop seen fallback r y)
       | (TExp (_marks, x) as e) :: r ->
         if Id.Hash_set.mem seen x.id
-        then loop seen r y
+        then loop seen fallback r y
         else (
           Id.Hash_set.add seen x.id;
-          e :: loop seen r y)
-      | TSide_condition (_, l1, pn, l2) :: r when true (* XXX unlikely to be ideal!! *) ->
-        tside_condition l1 pn l2 r
+          e :: loop seen fallback r y)
       | TSide_condition (_, l1, pn, l2) :: r ->
-        let l1 = loop seen l1 y in
-        let l2 = loop seen l2 y in
-        let r = loop seen r y in
-        tside_condition l1 pn l2 r
+        tside_condition l1 pn l2 (loop seen fallback r y)
+    and loop_nested seen parent_fallback l y =
+      (* Maybe we should just either either loop or remove_duplicates_naive, instead
+         of both. This may be because loop deduplicates a bit better. On the other
+         hand, this extra deduplication may not matter in practice. *)
+      let this_fallback =
+        parent_fallback
+        || List.exists l ~f:(function
+          | TSide_condition _ -> true
+          | _ -> false)
+      in
+      let res = loop seen this_fallback l y in
+      if this_fallback && not parent_fallback
+      then fst (remove_duplicates_naive res)
+      else res
     in
     fun seen l y ->
       Id.Hash_set.clear seen;
-      loop seen l y
+      loop_nested seen false l y
   ;;
 end
 
