@@ -295,16 +295,22 @@ module Uchar_set = struct
         List.fold_left
           (fun (usets, gens) t2 ->
             match to_re_gen ~ctx t2 with
-            | Gen a -> usets, a :: gens
+            | Gen a ->
+              ( usets
+              , (match gens with
+                 | [] -> [ a ]
+                 | _ :: _ -> Re.lookahead `Pos a :: gens) )
             | Uset a -> a :: usets, gens)
           ([], [])
           ts
       in
-      if List.is_empty gens then Uset (Uset.inter usets) else invalid_arg "Re_utf8.inter"
+      if List.is_empty gens
+      then Uset (Uset.inter usets)
+      else Gen (Re.seq (Re.lookahead `Pos (Uset.to_re (Uset.inter usets)) :: gens))
     | Diff (t1, t2) ->
       (match to_re_gen ~ctx t1, to_re_gen ~ctx t2 with
        | Uset u1, Uset u2 -> Uset (Uset.diff u1 u2)
-       | _ -> invalid_arg "Re_utf8.diff")
+       | r1, r2 -> Gen (Re.seq [ Re.lookahead `Neg (gen r2); gen r1 ]))
     | Compl ts -> to_re_gen ~ctx (Diff (Inter [], Union ts))
     | Union ts ->
       let uset, gens =
@@ -395,6 +401,8 @@ let leol = Wrap0 Re.leol
 let start = Wrap0 Re.start
 let stop = Wrap0 Re.stop
 let whole_string t = Wrap1 (Re.whole_string, t)
+let lookahead pn t = Wrap1 (Re.lookahead pn, t)
+let lookbehind pn t = Wrap1 (Re.lookbehind pn, t)
 let longest t = Wrap1 (Re.longest, t)
 let shortest t = Wrap1 (Re.shortest, t)
 let first t = Wrap1 (Re.first, t)

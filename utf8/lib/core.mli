@@ -27,6 +27,8 @@ val leol : t
 val start : t
 val stop : t
 val whole_string : t -> t
+val lookahead : [ `Neg | `Pos ] -> t -> t
+val lookbehind : [ `Neg | `Pos ] -> t -> t
 val longest : t -> t
 val shortest : t -> t
 val first : t -> t

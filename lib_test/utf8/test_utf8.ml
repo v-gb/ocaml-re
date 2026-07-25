@@ -30,6 +30,16 @@ let%expect_test "script" =
   [%expect {| ["φωτός"; "φῶς"; "γραφή"] |}]
 ;;
 
+let%expect_test "word" =
+  let re = Re_utf8.(compile (rep1 Re_utf8.Word.wordc)) in
+  strings (Re.matches re text);
+  [%expect
+    {| ["The"; "word"; "photography"; "was"; "created"; "from"; "the"; "Greek"; "roots"; "φωτός"; "phōtós"; "genitive"; "of"; "φῶς"; "phōs"; "light"; "2"; "and"; "γραφή"; "graphé"; "representation"; "by"; "means"; "of"; "lines"; "or"; "drawing"; "3"; "together"; "meaning"; "drawing"; "with"; "light"; "4"] |}];
+  let re = Re_utf8.(to_re (seq [ Word.bow; cset (set "pφ"); rep Word.wordc ])) in
+  strings (Re.matches (Re.compile re) text);
+  [%expect {| ["photography"; "φωτός"; "phōtós"; "φῶς"; "phōs"] |}]
+;;
+
 let uc str =
   let udecode = String.get_utf_8_uchar str 0 in
   if Uchar.utf_decode_length udecode <> String.length str then invalid_arg "uc";
@@ -65,6 +75,29 @@ let%expect_test "cset rg" =
   |> String.concat " "
   |> print_endline;
   [%expect {| #d7ff #e000 |}]
+;;
+
+let greek_alphabet =
+  "Α α, Β β, Γ γ, Δ δ, Ε ε, Ζ ζ, Η η, Θ θ, Ι ι, Κ κ, Λ λ, Μ μ, Ν ν, Ξ ξ, Ο ο, Π π, Ρ ρ, \
+   Σ σ ς, Τ τ, Υ υ, Φ φ, Χ χ, Ψ ψ, Ω ω"
+;;
+
+let%expect_test "cset inter" =
+  let re = Re_utf8.(compile (cset (inter [ Script.Grek.set; Gc.Lu.set ]))) in
+  print_string (Re.matches re greek_alphabet |> String.concat "");
+  [%expect {| ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ |}]
+;;
+
+let%expect_test "cset diff" =
+  let re = Re_utf8.(compile (cset (diff Script.Grek.set Gc.Lu.set))) in
+  print_string (Re.matches re greek_alphabet |> String.concat "");
+  [%expect {| αβγδεζηθικλμνξοπρσςτυφχψω |}]
+;;
+
+let%expect_test "cset compl" =
+  let re = Re_utf8.(compile (rep1 (cset (compl [ Gc.L.set; Gc.Zs.set ])))) in
+  strings (Re.matches re text |> List.sort_uniq String.compare);
+  [%expect {| ["\""; "\",[3]"; "\".[4]"; "\"[2]"; "("; ")"; "),"] |}]
 ;;
 
 let%expect_test "uchar set combining" =

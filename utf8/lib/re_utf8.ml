@@ -31,3 +31,4 @@
 
 include Core
 include Aliases
+module Word = Word

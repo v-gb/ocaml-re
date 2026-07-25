@@ -10,6 +10,11 @@ This is a branch of ocaml-re that, compared to the main branch:
   as the re2 in r++ and regex in rust).
 - unicode-aware case-insensitive matching, although not supporting unicode character
   classes like "all unicode letters"
+- unicode character class intersection, complement, difference. This is implemented
+  using general lookaheads. In principle intersection and complement would be enough
+  for this and probably much easier to implement, but we also provide...
+- unicode word boundaries. This is implemented using lookaheads and lookbehinds,
+  which seems necessary.
 
 Performance-wise, large regexes generally compile slower, execute slower initially and
 take more memory. Unicode character classes are much bigger than their ascii
