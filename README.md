@@ -8,6 +8,8 @@ This is a branch of ocaml-re that, compared to the main branch:
   script" etc. Since ocaml-re works by matching bytes, this works by building a big
   regex that simply match the bytes of the utf8 encoding of the uchars (same technique
   as the re2 in r++ and regex in rust).
+- unicode-aware case-insensitive matching, although not supporting unicode character
+  classes like "all unicode letters"
 
 Performance-wise, large regexes generally compile slower, execute slower initially and
 take more memory. Unicode character classes are much bigger than their ascii

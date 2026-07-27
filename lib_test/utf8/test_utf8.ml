@@ -117,3 +117,19 @@ let%expect_test "uchar set combining" =
     choose [ inter; diff; union ]
   done
 ;;
+
+let%expect_test "no_case" =
+  let re = Re_utf8.(compile (No_case.re (seq [ rep1 (cset (set "âÉδ")) ]))) in
+  let text = "not-that-âéδÂÉΔ" in
+  strings (Re.matches re text);
+  [%expect {| ["âéδÂÉΔ"] |}];
+  let re = Re_utf8.(compile (No_case.re (str "éléphant"))) in
+  let text = "ÉLÉPHANT" in
+  strings (Re.matches re text);
+  [%expect {| ["ÉLÉPHANT"] |}];
+  (* No support for matching for non-simple cases like this *)
+  let re = Re_utf8.(compile (No_case.re (str "straße"))) in
+  let text = "STRASSE" in
+  strings (Re.matches re text);
+  [%expect {| [] |}]
+;;

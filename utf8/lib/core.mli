@@ -35,6 +35,20 @@ val non_greedy : t -> t
 val group : ?name:string -> t -> t
 val no_group : t -> t
 val nest : t -> t
+val case : t -> t
+
+type foldcase_data
+
+(** Pass in [Re_utf8.No_case.data] as the first argument, or call
+    [Re_utf8.No_case.re]. The interface is this way so the data is not included
+    into executables which do not use this functionality.
+
+    Currently, this supports only simple case matches.
+
+    Unicode character classes (meaning the Uchar_set.t provided in their own modules,
+    like [Re_utf.Gc.Letter.set]) do not support case-insensitive matching.
+    If they appear under a case-insensitive match, [to_re] will raise an exception. *)
+val no_case : foldcase_data -> t -> t
 
 (** Character sets *)
 
@@ -82,3 +96,4 @@ val punct : Uchar_set.t
 
 val class_ : Re.t Lazy.t -> Uchar_set.t
 val to_set_for_tests : Uchar_set.t -> Set.Make(Uchar).t
+val create_foldcase_data : (int * int * int) array -> foldcase_data

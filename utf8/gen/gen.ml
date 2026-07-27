@@ -132,6 +132,13 @@ let generate ~bytes_of_uchar dst =
    gen1
      (Filename.concat dst module_ ^ ".ml")
      (ucharset ~bytes_of_uchar (filter_uchars Uucp.Alpha.is_alphabetic)));
+  (let module_ = "no_case" in
+   other_aliases := String.capitalize_ascii module_ :: !other_aliases;
+   Out_channel.with_open_bin
+     (Filename.concat dst (module_ ^ ".ml"))
+     (fun ch ->
+       let fmt = Format.formatter_of_out_channel ch in
+       No_case.gen fmt));
   (* *)
   Out_channel.with_open_bin (Filename.concat dst "aliases.ml") (fun ch ->
     let fmt = Format.formatter_of_out_channel ch in

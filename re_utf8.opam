@@ -25,6 +25,7 @@ depends: [
   "ppx_expect" {with-test}
   "js_of_ocaml" {with-test}
   "uucp" {build}
+  "uucd" {build}
   "odoc" {with-doc}
 ]
 build: [

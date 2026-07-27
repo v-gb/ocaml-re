@@ -42,7 +42,8 @@ Pure OCaml regular expressions with:
   (re (= :version))
   (ppx_expect :with-test)
   (js_of_ocaml :with-test)
-  (uucp :build))
+  (uucp :build)
+  (uucd :build))
  (description "
 Re_utf8 extends Re with utf8-aware regular expressions:
 * character classes like \"letters\" or \"greek script\"

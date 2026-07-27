@@ -71,9 +71,8 @@ let any =
     ]
 ;;
 
-type to_re_ctx = { case_sensitive : bool }
-
-let __ ctx = ctx.case_sensitive
+type foldcase_data = (int * int * int) array
+type to_re_ctx = { case_sensitive : foldcase_data option }
 
 module Uset = struct
   module M = Map.Make (Uchar)
@@ -147,6 +146,13 @@ module Uset = struct
   let compl t = diff any t
   let inter ts = compl (List.fold_left (fun acc t -> union ~big:acc (compl t)) empty ts)
 
+  let mem_range s e t =
+    (* I think this is supposed to mean: "is [s..e] a subset of t" *)
+    match first_intersecting_range t s e with
+    | None -> false
+    | Some (s', e') -> s' <=. s && e <=. e'
+  ;;
+
   let rec take_same_leading_range rg1 acc l =
     match l with
     | (rg2 :: rem2) :: rem when Stdlib.( = ) rg1 rg2 ->
@@ -201,6 +207,61 @@ module Uset = struct
   ;;
 end
 
+module Case_folding = struct
+  (* taken from https://github.com/ocaml/ocaml-re/pull/48 *)
+  (* Binary search in the array [a].  It is assumed that [a] (which has elements
+     of type int * int * int, is sorted so that if i < j, and [a1, b1, _ =
+    a.(i)], [a2, b2, _ = a.(j)], then [a1 <= b1 < a2 < b2].  It returns the
+     unique triple [a, b, d] as above such that [a <= c <= b] (if one exists),
+     or if none exists, the smallest such interval with [c < a], or if none
+     exists, raises [Not_found]. *)
+  let find_foldcase c a =
+    assert (Array.length a > 0);
+    let rec loop imin imax =
+      let imid = imin + ((imax - imin) / 2) in
+      let lo, hi, _ = a.(imid) in
+      if c < lo
+      then if imid = imin then `Ok a.(imid) else loop imin (imid - 1)
+      else if hi < c
+      then if imid = imax then `Not_found else loop (imid + 1) imax
+      else `Ok a.(imid)
+    in
+    loop 0 (Array.length a - 1)
+  ;;
+
+  (* Closes the characters set [s] under the equivalence relation of unicode
+     simple folding. *)
+  let case_insens foldcase_table s =
+    let s = ref s in
+    let rec add c1 c2 =
+      if c1 <= c2
+      then (
+        match find_foldcase c1 foldcase_table with
+        | `Ok (a, b, d) ->
+          if c1 < a
+          then add a c2
+          else (
+            let cx = min c2 b in
+            let c1d = c1 + d in
+            let c2d = cx + d in
+            if not (Uset.mem_range (Uchar.of_int c1d) (Uchar.of_int c2d) !s)
+            then (
+              s := Uset.union (Uset.range (Uchar.of_int c1d) (Uchar.of_int c2d)) ~big:!s;
+              add c1d c2d);
+            add (cx + 1) c2)
+        | `Not_found -> ())
+    in
+    Uset.M.iter (fun c1 c2 -> add (Uchar.to_int c1) (Uchar.to_int c2)) !s;
+    !s
+  ;;
+
+  let maybe_case_fold ~ctx uset =
+    match ctx.case_sensitive with
+    | None -> uset
+    | Some data -> case_insens data uset
+  ;;
+end
+
 module Uchar_set = struct
   type t =
     | Class of Re.t Lazy.t
@@ -224,7 +285,11 @@ module Uchar_set = struct
   let rec to_re ~ctx t = gen (to_re_gen ~ctx t)
 
   and to_re_gen ~ctx = function
-    | Class (lazy re) -> Gen re
+    | Class (lazy re) ->
+      (match ctx.case_sensitive with
+       | None -> Gen re
+       | Some _ ->
+         failwith "case-insensitive matching of large character classes is not supported")
     | Inter ts ->
       let usets, gens =
         List.fold_left
@@ -252,15 +317,19 @@ module Uchar_set = struct
           ts
       in
       if List.is_empty gens then Uset uset else Gen (Re.alt (Uset.to_re uset :: gens))
-    | Char uc -> Uset (Uset.singleton uc)
-    | Set ucs -> Uset (List.fold_left (fun acc uc -> Uset.add uc acc) Uset.empty ucs)
+    | Char uc -> Uset (Case_folding.maybe_case_fold ~ctx (Uset.singleton uc))
+    | Set ucs ->
+      Uset
+        (Case_folding.maybe_case_fold
+           ~ctx
+           (List.fold_left (fun acc uc -> Uset.add uc acc) Uset.empty ucs))
     | Rg (uc1, uc2) ->
       let uc1, uc2 = if Uchar.compare uc1 uc2 <= 0 then uc1, uc2 else uc2, uc1 in
-      Uset (Uset.range uc1 uc2)
+      Uset (Case_folding.maybe_case_fold ~ctx (Uset.range uc1 uc2))
   ;;
 
   let to_set_for_tests t =
-    match to_re_gen ~ctx:{ case_sensitive = false } t with
+    match to_re_gen ~ctx:{ case_sensitive = None } t with
     | Gen _ -> invalid_arg "Re_utf8.to_set_for_tests"
     | Uset uset -> Uset.to_set_for_tests uset
   ;;
@@ -280,35 +349,35 @@ let rev_uchars_of_string ~function_name s =
 
 type t =
   | Set of Uchar_set.t
-  | String of string
+  | String of Uchar.t list
   | Wrap0 of Re.t
   | Wrap1 of (Re.t -> Re.t) * t
   | Wrap_many of (Re.t list -> Re.t) * t list
   | Case of
-      { sensitive : bool
+      { sensitive : foldcase_data option
       ; t : t
       }
 
 let to_re t =
   let rec to_re ~ctx = function
     | Set uset -> Uchar_set.to_re ~ctx uset
-    | String str -> Re.str str
+    | String uchars ->
+      Re.seq
+        (List.map
+           (fun uchar ->
+             Uset.to_re (Case_folding.maybe_case_fold ~ctx (Uset.singleton uchar)))
+           uchars)
     | Wrap0 re -> re
     | Wrap1 (f, t) -> f (to_re ~ctx t)
     | Wrap_many (f, ts) -> f (List.map (to_re ~ctx) ts)
     | Case { sensitive; t } -> to_re ~ctx:{ case_sensitive = sensitive } t
   in
-  to_re ~ctx:{ case_sensitive = true } t
+  to_re ~ctx:{ case_sensitive = None } t
 ;;
 
 let compile t = Re.compile (to_re t)
 let any = Wrap0 any
-
-let str str =
-  ignore (rev_uchars_of_string ~function_name:"Re_utf8.str" str);
-  String str
-;;
-
+let str str = String (List.rev (rev_uchars_of_string ~function_name:"Re_utf8.str" str))
 let char u = Uchar_set.Char u
 let alt l = Wrap_many (Re.alt, l)
 let seq l = Wrap_many (Re.seq, l)
@@ -337,11 +406,8 @@ let nest t = Wrap1 (Re.nest, t)
 
 (* can't support mark *)
 
-(* not implemented *)
-let _case t = Case { sensitive = true; t }
-let _no_case t = Case { sensitive = false; t }
-(* not implemented *)
-
+let case t = Case { sensitive = None; t }
+let no_case data t = Case { sensitive = Some data; t }
 let cset uset = Set uset
 let set s = Uchar_set.Set (rev_uchars_of_string ~function_name:"Re_utf8.set" s)
 let inter us = Uchar_set.Inter us
@@ -378,3 +444,4 @@ let punct =
 ;;
 
 let to_set_for_tests = Uchar_set.to_set_for_tests
+let create_foldcase_data = Fun.id

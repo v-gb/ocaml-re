@@ -1,3 +1,13 @@
 (executable
  (name gen)
- (libraries re uucp))
+ (libraries re uucp uucd))
+
+(rule
+ (target ucd.all.grouped.zip)
+ (deps)
+ (action (run curl -sS -O https://www.unicode.org/Public/17.0.0/ucdxml/ucd.all.grouped.zip)))
+
+(rule
+ (target ucd.all.grouped.xml)
+ (deps (sandbox always) ucd.all.grouped.zip)
+ (action (run unzip ucd.all.grouped.zip)))
