@@ -38,8 +38,7 @@ type t = Ast.t
     contention while trying to share work.
 
     [Re] is not domain-safe as a whole. In particular {!Re.Str} isn't domain-safe, just
-    like {!Str} isn't.
-  *)
+    like {!Str} isn't. *)
 type re = Compile.re
 
 (** Manipulate matching groups. *)
@@ -92,8 +91,13 @@ end
 (** {2 Compilation and execution of a regular expression} *)
 
 (** Compile a regular expression into an executable version that can be
-    used to match strings, e.g. with {!exec}. *)
-val compile : t -> re
+    used to match strings, e.g. with {!exec}.
+
+    By default, built-in character classes like alnum or bow refer to
+    latin1 characters. Pass in ~latin1:false to turn these into ascii
+    ascii (N.B. character classes you may built with [set] or other
+    functions are unaffected by this). *)
+val compile : ?latin1:bool -> t -> re
 
 (** Return the number of capture groups (including the one
     corresponding to the entire regexp). *)
@@ -526,7 +530,8 @@ val opt : t -> t
 
 (** {2 String, line, word}
 
-    We define a word as a sequence of latin1 letters, digits and underscore. *)
+    We define a word as a sequence of ascii or latin1 (see [compile]) letters,
+    digits and underscore. *)
 
 (** Beginning of line *)
 val bol : t
@@ -692,12 +697,12 @@ val xdigit : t
 
 (** {2 Case modifiers} *)
 
-(** Case sensitive matching. Note that this works on latin1, not ascii and not
-    utf8. *)
+(** Case sensitive matching. Note that this works on latin1 or ascii (see [compile]),
+    not utf8. *)
 val case : t -> t
 
-(** Case insensitive matching. Note that this works on latin1, not ascii and not
-    utf8. *)
+(** Case insensitive matching. Note that this works on latin1 or ascii (see [compile]),
+    not utf8. *)
 val no_case : t -> t
 
 (****)

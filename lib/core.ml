@@ -24,22 +24,22 @@ open Import
 
 include struct
   let cset = Ast.cset
-  let rg c c' = cset (Cset.cseq c c')
-  let notnl = cset Cset.notnl
-  let lower = cset Cset.lower
-  let upper = cset Cset.upper
-  let alpha = cset Cset.alpha
-  let digit = cset Cset.cdigit
-  let alnum = cset Cset.alnum
-  let wordc = cset Cset.wordc
-  let ascii = cset Cset.ascii
-  let blank = cset Cset.blank
-  let cntrl = cset Cset.cntrl
-  let graph = cset Cset.graph
-  let print = cset Cset.print
-  let punct = cset Cset.punct
-  let space = cset Cset.space
-  let xdigit = cset Cset.xdigit
+  let rg c c' = cset false (Cset.cseq c c')
+  let notnl = cset false Cset.notnl
+  let lower = cset true Cset.lower
+  let upper = cset true Cset.upper
+  let alpha = cset true Cset.alpha
+  let digit = cset false Cset.cdigit
+  let alnum = cset true Cset.alnum
+  let wordc = cset true Cset.wordc
+  let ascii = cset false Cset.ascii
+  let blank = cset false Cset.blank
+  let cntrl = cset true Cset.cntrl
+  let graph = cset true Cset.graph
+  let print = cset true Cset.print
+  let punct = cset true Cset.punct
+  let space = cset false Cset.space
+  let xdigit = cset false Cset.xdigit
 end
 
 include Ast.Export
@@ -162,7 +162,7 @@ include struct
 
   type nonrec re = re
 
-  let compile = compile
+  let compile ?(latin1 = true) r = compile ~latin1 r
   let pp_re = pp_re
   let print_re = pp_re
   let copy_re = copy_re

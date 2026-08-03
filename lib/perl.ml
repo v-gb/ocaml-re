@@ -349,7 +349,7 @@ let re ?(opts = []) s =
   r
 ;;
 
-let compile = Re.compile
+let compile r = Re.compile ~latin1:false r
 let compile_pat ?(opts = []) s = compile (re ~opts s)
 
 let re_result ?opts s =

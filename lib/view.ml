@@ -59,7 +59,7 @@ let view_ast f (t : _ Ast.ast) : t =
 
 let view_set (cset : Ast.cset) : t =
   match cset with
-  | Cset set -> Set set
+  | Cset (_, set) -> Set set
   | Intersection sets -> Intersection (List.map sets ~f:Ast.t_of_cset)
   | Complement sets -> Complement (List.map sets ~f:Ast.t_of_cset)
   | Difference (x, y) -> Difference (Ast.t_of_cset x, Ast.t_of_cset y)

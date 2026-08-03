@@ -4,7 +4,7 @@ type ('a, _) ast = private
   | Case : 'a -> ('a, [> `Cased ]) ast
 
 type cset = private
-  | Cset of Cset.t
+  | Cset of bool * Cset.t
   | Intersection of cset list
   | Complement of cset list
   | Difference of cset * cset
@@ -39,7 +39,7 @@ val to_dyn : t -> Dyn.t
 val pp : t Fmt.t
 val pp_api : t Fmt.t
 val merge_sequences : (Cset.t, [ `Uncased ]) gen list -> (Cset.t, [ `Uncased ]) gen list
-val handle_case : bool -> t -> (Cset.t, [ `Uncased ]) gen
+val handle_case : bool -> bool -> t -> (Cset.t, [ `Uncased ]) gen
 val anchored : t -> bool
 val colorize : Color_map.t -> (Cset.t, [ `Uncased ]) gen -> bool
 
@@ -89,5 +89,5 @@ module Export : sig
   val witness : t -> string
 end
 
-val cset : Cset.t -> t
+val cset : bool -> Cset.t -> t
 val t_of_cset : cset -> t

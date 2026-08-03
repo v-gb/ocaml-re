@@ -142,5 +142,5 @@ let re_result ?case s =
   | exception Parse_error -> Error `Parse_error
 ;;
 
-let compile = Re.compile
+let compile r = Re.compile ~latin1:false r
 let compile_pat ?(case = true) s = compile (re ~case s)

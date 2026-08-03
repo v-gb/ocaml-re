@@ -844,8 +844,8 @@ and trans_seq ({ ids; kind; _ } as ctx) = function
     else A.seq ids kind' cr' cr''
 ;;
 
-let compile_1 regexp =
-  let regexp = Ast.handle_case false regexp in
+let compile_1 ~latin1 regexp =
+  let regexp = Ast.handle_case latin1 false regexp in
   let color_map = Color_map.make () in
   let need_lnl = Ast.colorize color_map regexp in
   let colors, boundary_table, color_repr = Color_map.flatten color_map in
@@ -877,7 +877,9 @@ let compile_1 regexp =
     ~group_count:(A.Mark.group_count !(ctx.pos))
 ;;
 
-let compile r =
+let compile ~latin1 r =
   let open Ast.Export in
-  compile_1 (if Ast.anchored r then group r else seq [ shortest (rep any); group r ])
+  compile_1
+    ~latin1
+    (if Ast.anchored r then group r else seq [ shortest (rep any); group r ])
 ;;

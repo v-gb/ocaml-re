@@ -50,7 +50,7 @@ val empty : t
 val single : c -> t
 val add : c -> t -> t
 val mem : c -> t -> bool
-val case_insens : t -> t
+val case_insens : latin1:bool -> t -> t
 val cdigit : t
 val calpha : t
 val cword : t

@@ -222,8 +222,13 @@ let calpha =
 
 let calnum = union calpha cdigit
 
-let case_insens s =
-  union_all [ s; offset 32 (inter s upper); offset (-32) (inter s clower) ]
+let case_insens ~latin1 s =
+  union
+    s
+    (let extra_chars =
+       union (offset 32 (inter s upper)) (offset (-32) (inter s clower))
+     in
+     if latin1 then extra_chars else inter ascii extra_chars)
 ;;
 
 let cword = cadd '_' calnum

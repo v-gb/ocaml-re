@@ -56,8 +56,8 @@ let array f fmt v =
 
 let offset fmt (x, y) = Format.fprintf fmt "(%d, %d)" x y
 
-let test_re ?pos ?len r s =
-  let offsets () = Re.Group.all_offset (Re.exec ?pos ?len (Re.compile r) s) in
+let test_re ?latin1 ?pos ?len r s =
+  let offsets () = Re.Group.all_offset (Re.exec ?pos ?len (Re.compile ?latin1 r) s) in
   Format.printf "%a@." (or_not_found (array offset)) offsets
 ;;
 

@@ -118,7 +118,11 @@ let%expect_test "cany" =
 ;;
 
 let%expect_test "case_insens" =
-  let cset = Cset.diff (Cset.case_insens Cset.lower) (Cset.case_insens Cset.upper) in
+  let cset =
+    Cset.diff
+      (Cset.case_insens ~latin1:true Cset.lower)
+      (Cset.case_insens ~latin1:true Cset.upper)
+  in
   Format.printf "%a@." Cset.pp cset;
   [%expect {| 181, 223, 255 |}]
 ;;

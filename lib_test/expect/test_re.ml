@@ -341,3 +341,10 @@ let%expect_test "witness" =
   t eol;
   [%expect {| |}]
 ;;
+
+let%expect_test "ascii vs latin1" =
+  test_re ~latin1:true (rep wordc) "a\223";
+  [%expect {| [| (0, 2) |] |}];
+  test_re ~latin1:false (rep wordc) "a\223";
+  [%expect {| [| (0, 1) |] |}]
+;;

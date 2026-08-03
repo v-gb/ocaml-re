@@ -30,7 +30,7 @@ let pp_ast (type a b) f fmt (ast : (a, b) ast) =
 ;;
 
 type cset =
-  | Cset of Cset.t
+  | Cset of bool * Cset.t
   | Intersection of cset list
   | Complement of cset list
   | Difference of cset * cset
@@ -39,7 +39,7 @@ type cset =
 let rec dyn_of_cset =
   let open Dyn in
   function
-  | Cset cset -> variant "Cset" [ Cset.to_dyn cset ]
+  | Cset (_, cset) -> variant "Cset" [ Cset.to_dyn cset ]
   | Intersection xs -> variant "Intersection" (List.map xs ~f:dyn_of_cset)
   | Complement xs -> variant "Complement" (List.map xs ~f:dyn_of_cset)
   | Difference (x, y) -> variant "Difference" [ dyn_of_cset x; dyn_of_cset y ]
@@ -230,7 +230,7 @@ let rec cset_to_api cset =
   let open Minicaml in
   match cset with
   | Cast s -> ast_to_api cset_to_api s
-  | Cset s -> cset_to_api' s
+  | Cset (_, s) -> cset_to_api' s
   | Intersection c -> call' "inter" [ List (List.map c ~f:cset_to_api) ]
   | Complement c -> call' "compl" [ List (List.map c ~f:cset_to_api) ]
   | Difference (a, b) -> call' "diff" [ cset_to_api a; cset_to_api b ]
@@ -273,7 +273,7 @@ let rec pp_cset fmt cset =
   let seq s rel = sexp fmt s (list pp_cset) rel in
   match cset with
   | Cast s -> pp_ast pp_cset fmt s
-  | Cset s -> sexp fmt "Set" Cset.pp s
+  | Cset (_, s) -> sexp fmt "Set" Cset.pp s
   | Intersection c -> seq "Intersection" c
   | Complement c -> seq "Complement" c
   | Difference (a, b) -> sexp fmt "Difference" (pair pp_cset pp_cset) (a, b)
@@ -312,29 +312,35 @@ type no_case = (Cset.t, [ `Uncased ]) gen
 let to_dyn = dyn_of_gen dyn_of_cset
 let pp = pp_gen pp_cset
 let pp_api fmt t = Minicaml.pp ~under_apply:false fmt (to_api cset_to_api t)
-let cset cset = Set (Cset cset)
+let cset bool cset = Set (Cset (bool, cset))
 
-let rec handle_case_cset ign_case = function
-  | Cset s -> if ign_case then Cset.case_insens s else s
-  | Cast (Alternative l) -> List.map ~f:(handle_case_cset ign_case) l |> Cset.union_all
+let rec handle_case_cset latin1 ign_case = function
+  | Cset (bool, s) ->
+    let s = if ign_case then Cset.case_insens ~latin1 s else s in
+    if bool && not latin1 then Cset.inter Cset.ascii s else s
+  | Cast (Alternative l) ->
+    List.map ~f:(handle_case_cset latin1 ign_case) l |> Cset.union_all
   | Complement l ->
-    List.map ~f:(handle_case_cset ign_case) l |> Cset.union_all |> Cset.diff Cset.cany
+    List.map ~f:(handle_case_cset latin1 ign_case) l
+    |> Cset.union_all
+    |> Cset.diff Cset.cany
   | Difference (r, r') ->
     Cset.inter
-      (handle_case_cset ign_case r)
-      (Cset.diff Cset.cany (handle_case_cset ign_case r'))
-  | Intersection l -> List.map ~f:(handle_case_cset ign_case) l |> Cset.intersect_all
-  | Cast (No_case a) -> handle_case_cset true a
-  | Cast (Case a) -> handle_case_cset false a
+      (handle_case_cset latin1 ign_case r)
+      (Cset.diff Cset.cany (handle_case_cset latin1 ign_case r'))
+  | Intersection l ->
+    List.map ~f:(handle_case_cset latin1 ign_case) l |> Cset.intersect_all
+  | Cast (No_case a) -> handle_case_cset latin1 true a
+  | Cast (Case a) -> handle_case_cset latin1 false a
 ;;
 
-let rec handle_case ign_case : t -> (Cset.t, [ `Uncased ]) gen = function
-  | Set s -> Set (handle_case_cset ign_case s)
-  | Sequence l -> Sequence (List.map ~f:(handle_case ign_case) l)
+let rec handle_case latin1 ign_case : t -> (Cset.t, [ `Uncased ]) gen = function
+  | Set s -> Set (handle_case_cset latin1 ign_case s)
+  | Sequence l -> Sequence (List.map ~f:(handle_case latin1 ign_case) l)
   | Ast (Alternative l) ->
-    let l = List.map ~f:(handle_case ign_case) l in
+    let l = List.map ~f:(handle_case latin1 ign_case) l in
     Ast (Alternative l)
-  | Repeat (r, i, j) -> Repeat (handle_case ign_case r, i, j)
+  | Repeat (r, i, j) -> Repeat (handle_case latin1 ign_case r, i, j)
   | ( Beg_of_line
     | End_of_line
     | Beg_of_word
@@ -345,14 +351,14 @@ let rec handle_case ign_case : t -> (Cset.t, [ `Uncased ]) gen = function
     | Last_end_of_line
     | Start
     | Stop ) as r -> r
-  | Sem (k, r) -> Sem (k, handle_case ign_case r)
-  | Sem_greedy (k, r) -> Sem_greedy (k, handle_case ign_case r)
-  | Group (n, r) -> Group (n, handle_case ign_case r)
-  | No_group r -> No_group (handle_case ign_case r)
-  | Nest r -> Nest (handle_case ign_case r)
-  | Ast (Case r) -> handle_case false r
-  | Ast (No_case r) -> handle_case true r
-  | Pmark (i, r) -> Pmark (i, handle_case ign_case r)
+  | Sem (k, r) -> Sem (k, handle_case latin1 ign_case r)
+  | Sem_greedy (k, r) -> Sem_greedy (k, handle_case latin1 ign_case r)
+  | Group (n, r) -> Group (n, handle_case latin1 ign_case r)
+  | No_group r -> No_group (handle_case latin1 ign_case r)
+  | Nest r -> Nest (handle_case latin1 ign_case r)
+  | Ast (Case r) -> handle_case latin1 false r
+  | Ast (No_case r) -> handle_case latin1 true r
+  | Pmark (i, r) -> Pmark (i, handle_case latin1 ign_case r)
 ;;
 
 module Export = struct
@@ -367,11 +373,13 @@ module Export = struct
   ;;
 
   let char =
-    let f = Dense_map.make ~size:256 ~f:(fun i -> cset (Cset.csingle (Char.chr i))) in
+    let f =
+      Dense_map.make ~size:256 ~f:(fun i -> cset false (Cset.csingle (Char.chr i)))
+    in
     fun c -> f (Char.code c)
   ;;
 
-  let any = cset Cset.cany
+  let any = cset false Cset.cany
 
   let str s : t =
     let l = ref [] in
@@ -452,7 +460,7 @@ module Export = struct
   let group ?name r = Group (name, r)
   let no_group = preserve_set (fun t -> No_group t)
   let nest r = Nest r
-  let set str = cset (Cset.set str)
+  let set str = cset false (Cset.set str)
 
   let mark r =
     let i = Pmark.gen () in
@@ -512,7 +520,7 @@ module Export = struct
       | Stop
       | End_of_str -> ""
     in
-    witness (handle_case false t)
+    witness (handle_case true false t)
   ;;
 end
 
